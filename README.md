@@ -1,11 +1,14 @@
 # Mitsuka Project
 
-![Architecture Diagram](file:///C:/Users/admin/.gemini/antigravity/brain/88b20f11-d775-4522-b2ed-e472b30d6bbf/architecture_diagram_1781968605207.png)
+## 🎯 Overview
+Mitsuka is a local speech‑to‑text and Voice Activity Detection (VAD) solution built with **FastAPI** and **faster‑whisper**. It provides an OpenAI‑compatible transcription endpoint and a lightweight VAD service that returns valence‑arousal‑dominance (VAD) scores for a given text.
 
 ---
 
-## 🎯 Overview
-Mitsuka is a local speech‑to‑text and Voice Activity Detection (VAD) solution built with **FastAPI** and **faster‑whisper**. It provides an OpenAI‑compatible transcription endpoint and a lightweight VAD service that returns valence‑arousal‑dominance (VAD) scores for a given text.
+## 🙏 Credits
+The `airi/` directory is based on [moeru-ai/airi](https://github.com/moeru-ai/airi), an open‑source AI companion / Tamagotchi framework — all credit for that codebase goes to its original authors.
+
+**Everything from the VAD section onward in this README — the VAD service, the Whisper transcription server, the model wiring under `ModelPreVoice/`, and the integration work tying them into `airi/` — is my own work**, built on top of that base.
 
 ---
 
