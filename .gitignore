@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+VAD/.venv/
+VAD/venv/
+
+# Downloaded / cached model weights (reproducible, not source)
+VAD/models/
+
+# Oversized model checkpoints (exceed GitHub's 100MB limit)
+ModelPreVoice/model.safetensors
+VAD/model/vad_bert_final.pt
+
+# Runtime data
+VAD/data/*.db
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env secrets (root-level services only; airi/ ships its own .gitignore)
+.env
+.env.local
+!.env.example
