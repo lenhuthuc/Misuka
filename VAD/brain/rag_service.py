@@ -38,7 +38,6 @@ class RAGService:
 
     def _reciprocal_rank_fusion(
         self,
-        queries: list[str],
         all_results: list[list],
     ) -> list[RetrievedDoc]:
         rrf_scores: dict[str, float] = defaultdict(float)
@@ -66,4 +65,11 @@ class RAGService:
     def _format_context(docs: list[RetrievedDoc]) -> str:
         if not docs:
             return "No relevant documents found."
-        return "\n\n".join(f"[{i+1}] {d['content']}" for i, d in enumerate(docs))
+        lines = []
+        for i, d in enumerate(docs):
+            # Expose the stored emotion label so the agent consumes it directly
+            # instead of re-deriving emotion from raw V/A/D numbers.
+            emotion = (d.get("metadata") or {}).get("emotion")
+            tag = f" (felt: {emotion})" if emotion else ""
+            lines.append(f"[{i+1}]{tag} {d['content']}")
+        return "\n\n".join(lines)

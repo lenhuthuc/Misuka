@@ -10,8 +10,10 @@ from pydantic import BaseModel
 
 from brain.app import SEED_DOCS
 from brain.background import run_memory_tasks
+from brain.emotion_service import EmotionReading, EmotionService, extract_memory_vads
 from brain.nodes.generate import build_messages
 from brain.nodes.should_rag import should_use_rag
+from schemas.vad import VADScores
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +28,27 @@ class ChatResponse(BaseModel):
     response: str
     generated_queries: list[str]
     docs_count: int
+    # Current system emotional state: response V/A/D blended with retrieved memories' V/A/D
+    emotion: str
+    state: VADScores
 
 
 class SeedResponse(BaseModel):
     inserted: int
+
+
+async def _emotion_state(
+    emotion_svc: EmotionService,
+    response: str,
+    docs: list,
+) -> tuple[EmotionReading, EmotionReading]:
+    """Infer the response's own V/A/D, then blend with retrieved memories' V/A/D.
+
+    Returns (response_reading, blended_current_state).
+    """
+    reading = await emotion_svc.infer(response)
+    state = emotion_svc.current_state(reading, extract_memory_vads(docs))
+    return reading, state
 
 
 @router.post("", response_model=ChatResponse)
@@ -49,18 +68,22 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
     )
 
     response_text = result["response"]
+    reading, state = await _emotion_state(
+        request.app.state.brain_emotion, response_text, result.get("retrieved_docs", [])
+    )
 
     # Save conversation history and optionally extract long-term facts in the
     # background — client receives the response without waiting for these.
     llm = request.app.state.brain_llm
     memory = request.app.state.brain_memory
+    vector = request.app.state.brain_vector
 
     def _on_bg_done(task: asyncio.Task) -> None:
         if exc := task.exception():
             logger.warning("background memory task failed: %s", exc)
 
     bg = asyncio.create_task(
-        run_memory_tasks(body.query, response_text, memory, llm)
+        run_memory_tasks(body.query, response_text, memory, llm, emotion=reading, vector=vector)
     )
     bg.add_done_callback(_on_bg_done)
 
@@ -68,6 +91,8 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         response=response_text,
         generated_queries=result.get("generated_queries", []),
         docs_count=len(result.get("retrieved_docs", [])),
+        emotion=state.emotion,
+        state=VADScores(valence=state.valence, arousal=state.arousal, dominance=state.dominance),
     )
 
 
@@ -87,11 +112,12 @@ async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
         yield ": ping\n\n"
 
         full_response = ""
+        docs = []
         try:
             context = ""
             if should_use_rag(body.query):
                 try:
-                    _, _, context = await rag.build_context(body.query)
+                    _, docs, context = await rag.build_context(body.query)
                 except Exception as exc:
                     logger.warning("chat_stream | RAG failed, skipping: %s", exc)
 
@@ -105,6 +131,22 @@ async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
             logger.warning("chat_stream | error: %s", exc)
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
 
+        reading = None
+        if full_response:
+            try:
+                reading, state = await _emotion_state(
+                    request.app.state.brain_emotion, full_response, docs
+                )
+                state_payload = {
+                    "emotion": state.emotion,
+                    "state": VADScores(
+                        valence=state.valence, arousal=state.arousal, dominance=state.dominance
+                    ).model_dump(),
+                }
+                yield f"data: {json.dumps(state_payload)}\n\n"
+            except Exception as exc:
+                logger.warning("chat_stream | emotion inference failed: %s", exc)
+
         yield "data: [DONE]\n\n"
 
         if full_response:
@@ -112,7 +154,12 @@ async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
                 if exc := task.exception():
                     logger.warning("background memory task failed: %s", exc)
 
-            bg = asyncio.create_task(run_memory_tasks(body.query, full_response, memory, llm))
+            bg = asyncio.create_task(
+                run_memory_tasks(
+                    body.query, full_response, memory, llm,
+                    emotion=reading, vector=request.app.state.brain_vector,
+                )
+            )
             bg.add_done_callback(_on_bg_done)
 
     return StreamingResponse(

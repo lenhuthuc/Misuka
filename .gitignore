@@ -16,6 +16,8 @@ VAD/models/
 # Oversized model checkpoints (exceed GitHub's 100MB limit)
 ModelPreVoice/model.safetensors
 VAD/model/vad_bert_final.pt
+VAD/vad_bert_final.pt
+*.pt
 
 # Runtime data
 VAD/data/*.db

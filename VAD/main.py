@@ -41,6 +41,7 @@ from api.chat import router as chat_router
 from service.audio_emotion_service import AudioEmotionService
 from service.vad_service import VADService
 import brain.app as brain_app
+from brain.emotion_service import EmotionService
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ async def lifespan(app: FastAPI):
     app.state.brain_vector = vector
     app.state.brain_llm = llm
     app.state.brain_memory = memory
+    app.state.brain_emotion = EmotionService(_vad_service)
 
     yield
 

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from brain.emotion_service import EmotionReading
     from brain.llm_service import LLMService
     from brain.memory_service import MemoryService
+    from brain.vector_service import VectorService
 
 logger = logging.getLogger(__name__)
 
@@ -36,19 +39,42 @@ async def run_memory_tasks(
     response: str,
     memory: "MemoryService",
     llm: "LLMService",
+    emotion: "EmotionReading | None" = None,
+    vector: "VectorService | None" = None,
 ) -> None:
-    """Save conversation turn and optionally extract long-term facts.
+    """Save conversation turn (with the response's V/A/D + emotion), index the
+    exchange as a retrievable memory, and optionally extract long-term facts.
 
     Runs entirely after the HTTP response has been returned to the client —
     latency here does not affect the user.
     """
     try:
         await memory.save_message("user", query)
-        await memory.save_message("assistant", response)
+        await memory.save_message(
+            "assistant", response,
+            vad=emotion.vad if emotion else None,
+            emotion=emotion.emotion if emotion else None,
+        )
         logger.info("background | saved conversation turn")
     except Exception as exc:
         logger.warning("background | failed to save conversation: %s", exc)
         return
+
+    # Index the exchange in Qdrant so RAG retrieval returns the response along
+    # with its V/A/D + emotion label.
+    if vector is not None:
+        try:
+            meta: dict = {
+                "type": "conversation",
+                "response": response,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            if emotion is not None:
+                meta.update(emotion.as_dict())
+            await vector.upsert([f"User: {query}\nAssistant: {response}"], [meta])
+            logger.info("background | indexed exchange in vector store")
+        except Exception as exc:
+            logger.warning("background | failed to index exchange: %s", exc)
 
     try:
         raw = await llm.generate(_DECIDE_PROMPT.format(query=query, response=response))
