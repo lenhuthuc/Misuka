@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { Button, Callout, FieldCombobox } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
-import { computed, toRef } from 'vue'
+import { computed } from 'vue'
 
 import { useAudioAnalyzer, useAudioDevice } from '../../../../composables'
-import { useHearingStore } from '../../../../stores/modules/hearing'
 import { useSettingsAudioDevice } from '../../../../stores'
+import { useHearingStore } from '../../../../stores/modules/hearing'
 
 const props = withDefaults(defineProps<{
   granted?: boolean // permission status on OS level

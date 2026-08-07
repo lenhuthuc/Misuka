@@ -3,24 +3,25 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.pytest_cache/
 
 # Virtual environments
 .venv/
 venv/
-VAD/.venv/
-VAD/venv/
+apps/local-api/.venv/
+apps/local-api/venv/
 
 # Downloaded / cached model weights (reproducible, not source)
-VAD/models/
+apps/local-api/models/
 
 # Oversized model checkpoints (exceed GitHub's 100MB limit)
 ModelPreVoice/model.safetensors
-VAD/model/vad_bert_final.pt
-VAD/vad_bert_final.pt
+apps/local-api/model/vad_bert_final.pt
+apps/local-api/vad_bert_final.pt
 *.pt
 
 # Runtime data
-VAD/data/*.db
+apps/local-api/data/*.db
 
 # Editor / OS
 .vscode/

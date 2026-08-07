@@ -1587,14 +1587,14 @@ export const useProvidersStore = defineStore('providers', () => {
             languages: [{ code: 'en', title: 'English' }],
           },
           {
-            id: 'vi_VN-25hours_single-low',
+            id: '25hours_single-low',
             name: 'Vietnamese 25h (Low)',
             provider: 'piper-tts',
             description: 'Vietnamese single-speaker, low quality',
             languages: [{ code: 'vi', title: 'Vietnamese' }],
           },
           {
-            id: 'vi_VN-vais1000-medium',
+            id: 'vais1000-medium',
             name: 'Vietnamese VAIS1000 (Medium)',
             provider: 'piper-tts',
             description: 'Vietnamese VAIS1000 dataset, medium quality',
@@ -1624,7 +1624,7 @@ export const useProvidersStore = defineStore('providers', () => {
               return { errors: [new Error(`Piper server returned ${res.status}`)], reason: `Server returned ${res.status}`, valid: false }
           }
           catch {
-            return { errors: [new Error('Piper TTS server not reachable')], reason: 'Server not reachable at ' + config.baseUrl, valid: false }
+            return { errors: [new Error('Piper TTS server not reachable')], reason: `Server not reachable at ${config.baseUrl}`, valid: false }
           }
 
           return { errors: [], reason: '', valid: true }
@@ -1693,7 +1693,7 @@ export const useProvidersStore = defineStore('providers', () => {
               return { errors: [new Error(`VieNeu server trả về ${res.status}`)], reason: `Server returned ${res.status}`, valid: false }
           }
           catch {
-            return { errors: [new Error('Không kết nối được VieNeu server')], reason: 'Server not reachable at ' + config.baseUrl, valid: false }
+            return { errors: [new Error('Không kết nối được VieNeu server')], reason: `Server not reachable at ${config.baseUrl}`, valid: false }
           }
           return { errors: [], reason: '', valid: true }
         },

@@ -36,11 +36,13 @@ function handleSettingsOpen(open: boolean) {
 // Default true — this project runs the local Python stack; set to false to use cloud providers instead.
 const localMode = useLocalStorage('settings/local-conversation/enabled', true)
 
+const emotionStore = useEmotionStore()
+
 const localConv = useLocalConversation({
   language: 'en',
-  onEmotion: e => { emotionStore.emotion.value = e },
+  onEmotion: (e) => { emotionStore.emotion = e },
 })
-const { state: localState, transcript: localTranscript, reply: localReply } = localConv
+const { state: localState, transcript: localTranscript, reply: localReply, error: localError } = localConv
 
 const LOCAL_STATE_LABEL: Record<string, string> = {
   idle: 'Đang lắng nghe',
@@ -72,7 +74,6 @@ const providersStore = useProvidersStore()
 const consciousnessStore = useConsciousnessStore()
 const { activeProvider: activeChatProvider, activeModel: activeChatModel } = storeToRefs(consciousnessStore)
 const chatStore = useChatOrchestratorStore()
-const emotionStore = useEmotionStore()
 
 const shouldUseStreamInput = computed(() => supportsStreamInput.value && !!stream.value)
 
@@ -90,12 +91,12 @@ const {
   },
   onSpeechEnd: () => handleSpeechEnd(),
   onSpeechReady: (buffer, _duration) => {
-    console.log('[VAD] speech-ready | localMode:', localMode.value, '| samples:', buffer.length)
+    console.info('[VAD] speech-ready | localMode:', localMode.value, '| samples:', buffer.length)
     if (!localMode.value)
       return
     // Use VAD buffer directly — already 16kHz mono, bypasses mediabunny entirely
     const wav = encodeWav(buffer, 16000)
-    console.log('[VAD] wav blob size:', wav.size)
+    console.info('[VAD] wav blob size:', wav.size)
     // emotion-vad + STT handled together inside localConv.process()
     localConv.process(wav)
   },
@@ -274,6 +275,12 @@ const cursorPosition = computed(() => ({
             style="max-width:320px;padding:0.25rem 0.6rem;border-radius:8px;font-size:0.68rem;background:rgba(99,102,241,0.35);color:#c7d2fe;text-align:center;word-break:break-word;"
           >
             🤖 {{ localReply }}
+          </span>
+          <span
+            v-if="localError"
+            style="max-width:320px;padding:0.25rem 0.6rem;border-radius:8px;font-size:0.68rem;background:rgba(239,68,68,0.35);color:#fecaca;text-align:center;word-break:break-word;"
+          >
+            ⚠️ {{ localError }} — hãy thử nói lại
           </span>
         </div>
       </div>

@@ -1,0 +1,93 @@
+name: Mitsuka CI
+
+# CI for the Mitsuka-specific integration (apps/local-api FastAPI service +
+# the local-conversation flow in stage-ui/stage-web). Deliberately separate
+# from any upstream AIRI workflow so upstream syncs don't conflict with it —
+# see REFACTOR_PLAN.md section 4, principle 5 (separate Mitsuka/upstream
+# boundaries) and Phase 0 (offline, pass/fail-in-one-command test baseline).
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  backend-tests:
+    name: local-api backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+          cache-dependency-path: apps/local-api/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+        working-directory: apps/local-api
+      - run: python -m pytest -q
+        working-directory: apps/local-api
+
+  frontend-typecheck:
+    name: stage-ui / stage-web typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: airi/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: airi
+      - run: pnpm -F @proj-airi/stage-ui typecheck
+        working-directory: airi
+      - run: pnpm -F @proj-airi/stage-web typecheck
+        working-directory: airi
+
+  frontend-lint:
+    name: Lint local-conversation flow
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: airi/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: airi
+      # Scoped to the files this project actually owns/edits — see
+      # REFACTOR_PLAN.md section 2 ("Phạm vi"). A full-repo `pnpm lint` would
+      # also gate on unrelated upstream AIRI lint debt outside Mitsuka's control.
+      - run: >
+          pnpm exec eslint
+          packages/stage-ui/src/composables/local-conversation.ts
+          packages/stage-ui/src/composables/local-conversation-sse.ts
+          packages/stage-ui/src/stores/providers.ts
+          apps/stage-web/src/pages/index.vue
+          packages/stage-ui/src/components/scenarios/dialogs/audio-input/hearing-config.vue
+        working-directory: airi
+
+  frontend-tests:
+    name: stage-ui Vitest suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: airi/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: airi
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: airi/packages/stage-ui
+      - run: pnpm exec vitest run
+        working-directory: airi/packages/stage-ui

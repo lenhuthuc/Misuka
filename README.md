@@ -8,16 +8,20 @@ Mitsuka is a local speech‑to‑text and Voice Activity Detection (VAD) solutio
 ## 🙏 Credits
 The `airi/` directory is based on [moeru-ai/airi](https://github.com/moeru-ai/airi), an open‑source AI companion / Tamagotchi framework — all credit for that codebase goes to its original authors.
 
-**Everything from the VAD section onward in this README — the VAD service, the Whisper transcription server, the model wiring under `ModelPreVoice/`, and the integration work tying them into `airi/` — is my own work**, built on top of that base.
+**Everything from the Architecture section onward in this README — the `apps/local-api` service, the Whisper transcription server, the model wiring under `ModelPreVoice/`, and the integration work tying them into `airi/` — is my own work**, built on top of that base.
 
 ---
 
 ## 🏗️ Architecture
-The diagram above illustrates the main components:
-- **Whisper Server** (`whisper_server.py`): FastAPI app exposing `/v1/audio/transcriptions` and `/health`. Uses `faster-whisper` models for Vietnamese/English transcription.
-- **VAD Service** (`VAD/VAD_service.py`): FastAPI app exposing `/vad` that loads a PHOBERT‑based model to predict VAD scores.
-- **Model files** (`*.onnx`, `*.safetensors`, `vad_phobert_final.pt`): Stored in the repository and loaded at runtime.
-- Both services can be run independently and are discovered automatically by the front‑end applications (e.g., Tamagotchi UI).
+- **`apps/local-api`**: the single FastAPI app (port 8000, entry point `main.py`) — VAD/emotion
+  analysis, Whisper transcription, Piper TTS, and the RAG/LLM "brain" all live here. See
+  [CONTEXT.md](CONTEXT.md) for the full architecture (data flow, SSE envelope, logging).
+- **`tools/legacy/whisper_server.py`**: a standalone, legacy Whisper-only server (port 9000,
+  OpenAI-compatible `/v1/audio/transcriptions`) kept separate from `apps/local-api` for ad-hoc testing.
+- **Model files**: Piper TTS voices live under `assets/models/voices/` (`*.onnx` + `*.onnx.json`,
+  tracked in git); the VAD `.pt` checkpoint and downloaded Whisper models live inside
+  `apps/local-api/` and are gitignored — see `.gitignore`.
+- `airi/` (the Vue front-end monorepo) discovers `apps/local-api` at `http://localhost:8000` by default.
 
 ---
 
@@ -26,26 +30,27 @@ The diagram above illustrates the main components:
 Mitsuka/
 ├─ .github/                # CI/CD workflows
 ├─ ModelPreVoice/          # Whisper model weights & tokenizer
-├─ VAD/                    # VAD service source & model
-│   ├─ VAD_service.py      # FastAPI VAD API
-│   ├─ model/…             # Model checkpoint & helpers
-│   └─ requirements.txt    # VAD dependencies
-├─ airi/                   # Main monorepo root (this README lives here)
-│   ├─ apps/               # Front‑end applications
-│   ├─ services/…          # Additional services
-│   ├─ scripts/…           # Utility scripts
-│   ├─ whisper_server.py   # FastAPI Whisper API
-│   └─ test_transcribe.py  # Simple client test script
-├─ en_US‑hfc_female-medium.onnx*  # Example Whisper model (English)
-├─ vi_VN‑25hours_single-low.onnx* # Example Whisper model (Vietnamese)
+├─ assets/
+│  └─ models/
+│     └─ voices/           # Piper TTS voices (*.onnx + *.onnx.json), tracked in git
+├─ apps/
+│  └─ local-api/           # The FastAPI service — see CONTEXT.md for the full breakdown
+│     ├─ main.py           # App entry: create_app() factory
+│     ├─ api/               # HTTP routes
+│     ├─ brain/, application/, core/, service/, model/, schemas/
+│     ├─ tests/             # pytest — offline unit/integration + opt-in smoke
+│     └─ requirements.txt / requirements-dev.txt
+├─ airi/                   # Upstream airi monorepo (front-end apps, Tamagotchi UI)
+├─ tools/
+│  └─ legacy/              # whisper_server.py, test_transcribe.py — not part of the production entry point
 └─ README.md               # **This file**
 ```
-*(files truncated for brevity)*
+*(files truncated for brevity — see [CONTEXT.md](CONTEXT.md) for the full `apps/local-api` tree)*
 
 ---
 
 ## 📡 API Reference
-### Whisper Transcription Server
+### `tools/legacy/whisper_server.py` (standalone, port 9000)
 - **GET** `/health`
   ```json
   {"status": "ok", "model": "small"}
@@ -72,69 +77,76 @@ Mitsuka/
   }
   ```
 
-### VAD Service
-- **GET** `/health`
-  Returns `{ "status": "ok" }`.
+### `apps/local-api` (main FastAPI service, port 8000)
+- **GET** `/health/live`, `/health/ready`, `/health` (alias of `/health/live`)
 - **POST** `/vad`
   ```http
   POST /vad
   Content‑Type: application/json
-  
+
   {"text": "I feel happy"}
   ```
   **Response**
   ```json
   {"v": 0.73, "a": 0.55, "d": 0.61}
   ```
-  *V, A, D* range from 0‑1.
+  *V, A, D* each range **-1 to 1**.
+- **POST** `/emotion-vad` — multipart audio + `language` field; fuses audio (wav2vec2) and text
+  (Whisper → PhoBERT) V/A/D.
+- **POST** `/v1/chat`, **POST** `/v1/chat/stream` (SSE), **POST** `/v1/chat/seed`
+- **POST** `/v1/audio/speech`, **POST** `/v1/audio/speech/stream`, **GET** `/v1/audio/voices`
+- **POST** `/v1/audio/transcriptions` (OpenAI-compatible)
+
+See [CONTEXT.md](CONTEXT.md) for request/response shapes, the SSE event envelope, and error codes.
 
 ---
 
 ## 🛠️ Setup & Installation
-1. **Python ≥ 3.9** (recommended: 3.11).
-2. Create a virtual environment:
+1. **Python 3.10+**.
+2. Create a virtual environment inside `apps/local-api` and install dependencies:
    ```bash
+   cd apps/local-api
    python -m venv .venv
    source .venv/bin/activate   # Windows: .venv\Scripts\activate
+   pip install -r requirements.txt        # runtime deps
+   pip install -r requirements-dev.txt    # + pytest, for running the test suite
    ```
-3. Install core dependencies:
-   ```bash
-   pip install -r requirements.txt   # root requirements (if present)
-   # VAD specific deps
-   pip install -r VAD/requirements.txt
-   ```
-4. Install Whisper dependencies (already in `requirements.txt` of the repo):
-   ```bash
-   pip install faster-whisper fastapi uvicorn python-multipart
-   ```
-5. **Model files** – the repository ships with pre‑downloaded ONNX models. Ensure the environment variables point to the correct model size if you wish to change it:
-   ```bash
-   export WHISPER_MODEL=small   # tiny / base / small / medium / large‑v3
-   export WHISPER_DEVICE=cpu    # or cuda
-   export WHISPER_COMPUTE=int8  # int8 / float16 / float32
-   ```
+3. **Model files** – `apps/local-api/model/vad_bert_final.pt` (VAD checkpoint) and Whisper models
+   under `apps/local-api/models/` are gitignored; place them there (or point
+   `VAD_MODEL_PATH`/`WHISPER_MODEL` env vars elsewhere) before running the service. Piper `.onnx`
+   voices ship under `assets/models/voices/`. Override the defaults via environment variables — see
+   `apps/local-api/brain/config.py` for the full list (`WHISPER_MODEL`, `WHISPER_DEVICE`,
+   `WHISPER_COMPUTE`, `PIPER_MODELS_DIR`, `OLLAMA_BASE_URL`, `QDRANT_URL`, `LOG_LEVEL`, `LOG_JSON`, ...).
 
 ---
 
 ## ▶️ Running the Services
-### Whisper Server
+### Whisper Server (standalone, legacy)
 ```bash
-python whisper_server.py
+python tools/legacy/whisper_server.py
 # defaults to http://0.0.0.0:9000
 ```
-### VAD Service
+### Main local API (VAD, emotion, chat/RAG, TTS, Whisper)
 ```bash
-python VAD/VAD_service.py
+cd apps/local-api
+python main.py
 # defaults to http://0.0.0.0:8000
 ```
 Both servers support hot‑reload when run with `uvicorn --reload`.
 
+### Running the test suite
+```bash
+cd apps/local-api
+python -m pytest -q
+# Fully offline — no model, Ollama, or Qdrant needed; see tests/conftest.py.
+```
+
 ---
 
 ## 📌 Quick‑Start Test
-Transcribe a local WAV file using the bundled test script:
+Transcribe a local WAV file using the bundled test script (`apps/local-api` must be running):
 ```bash
-python test_transcribe.py path/to/audio.wav
+python tools/legacy/test_transcribe.py path/to/audio.wav
 ```
 You should see a `200` status and the JSON transcription result.
 

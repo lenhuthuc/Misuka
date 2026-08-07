@@ -1,4 +1,8 @@
+import { errorMessageFrom } from '@moeru/std'
 import { ref } from 'vue'
+
+import { describeHttpFailure, extractSentences, MIN_SENTENCE_LEN, parseChatStreamLine } from './local-conversation-sse'
+import { createTtsPlaybackQueue } from './local-conversation-tts-queue'
 
 export type LocalConvState = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
 
@@ -15,23 +19,6 @@ export interface UseLocalConversationOptions {
   language?: string
   /** Called after emotion analysis completes — use to update avatar expression. */
   onEmotion?: (emotion: EmotionVAD) => void
-}
-
-const MIN_SENTENCE_LEN = 5
-
-/**
- * Extract complete sentences from a streaming text buffer.
- *
- * Before: "Hello. How are you? Fine"
- * After:  sentences=["Hello.", "How are you?"], remaining="Fine"
- */
-function extractSentences(buffer: string): [sentences: string[], remaining: string] {
-  // Split on sentence terminators followed by whitespace
-  const parts = buffer.split(/(?<=[.!?])\s+/)
-  if (parts.length <= 1)
-    return [[], buffer]
-  const sentences = parts.slice(0, -1).map(s => s.trim()).filter(s => s.length >= MIN_SENTENCE_LEN)
-  return [sentences, parts[parts.length - 1]]
 }
 
 /**
@@ -53,47 +40,20 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
   const reply = ref('')
   const error = ref<string>()
 
+  const ttsQueue = createTtsPlaybackQueue(baseUrl)
+
   // Per-turn abort controller — cancelled on barge-in or new turn start
   let _abort: AbortController | null = null
-  // Serial TTS playback queue — sentences chain as promises so they play in order
-  let _ttsChain: Promise<void> = Promise.resolve()
+  // Bumped at the start of every turn. A turn resuming from an `await` compares
+  // its own snapshot against this to tell whether a newer turn has superseded
+  // it, instead of relying only on AbortController cancellation timing — an
+  // aborted fetch can still let one already-buffered chunk through a `read()`
+  // that was in flight before `abort()` took effect.
+  let _generation = 0
 
   function _stopAll() {
     _abort?.abort()
     _abort = null
-  }
-
-  /**
-   * Fetch TTS audio for one sentence and append it to the playback chain.
-   * Fetches run in parallel (pipelined), but audio.play() is gated by the chain.
-   */
-  function _queueSentence(sentence: string, abort: AbortController) {
-    // Start the TTS fetch immediately so it's ready when it's this sentence's turn
-    const audioPromise = fetch(`${baseUrl}/v1/audio/speech`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: sentence, voice: 'default' }),
-      signal: abort.signal,
-    })
-      .then(r => (r.ok ? r.blob() : null))
-      .then(blob => blob ? URL.createObjectURL(blob) : null)
-      .catch(() => null)
-
-    _ttsChain = _ttsChain.then(async () => {
-      if (abort.signal.aborted)
-        return
-      const url = await audioPromise
-      if (!url || abort.signal.aborted)
-        return
-      await new Promise<void>((resolve) => {
-        const audio = new Audio(url)
-        const cleanup = () => { URL.revokeObjectURL(url); resolve() }
-        audio.onended = cleanup
-        audio.onerror = cleanup
-        abort.signal.addEventListener('abort', () => { audio.pause(); cleanup() }, { once: true })
-        audio.play().catch(cleanup)
-      })
-    })
   }
 
   /** Call when VAD detects speech start — interrupts any in-progress TTS (barge-in). */
@@ -106,23 +66,29 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
 
   /** Call with the WAV blob when user finishes speaking. Runs full STT → Chat → TTS pipeline. */
   async function process(audioBlob: Blob | undefined) {
-    console.log('[localConv] process() | blob size:', audioBlob?.size ?? 'undefined')
+    console.info('[localConv] process() | blob size:', audioBlob?.size ?? 'undefined')
     if (!audioBlob || audioBlob.size === 0)
       return
 
     _stopAll()
-    error.value = undefined
+    const myGeneration = ++_generation
     const abort = new AbortController()
     _abort = abort
+    // True once either a newer turn has started, or this turn was itself
+    // barge-in cancelled — either way, this turn must stop touching state.
+    const superseded = () => myGeneration !== _generation || abort.signal.aborted
+
+    error.value = undefined
 
     // ── 1. emotion-vad: Whisper STT + audio emotion analysis (one call) ──────
     // /emotion-vad runs Whisper + wav2vec2 + PhoBERT concurrently and returns
     // both the transcript and fused VAD scores — avoids a second Whisper call.
     state.value = 'transcribing'
-    console.log('[localConv] calling /emotion-vad at', baseUrl)
+    console.info('[localConv] calling /emotion-vad at', baseUrl)
 
     const form = new FormData()
     form.append('audio', audioBlob, 'audio.wav')
+    form.append('language', language)
 
     let text = ''
     try {
@@ -132,25 +98,29 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
         signal: abort.signal,
       })
       if (!r.ok)
-        throw new Error(`emotion-vad failed (${r.status})`)
+        throw new Error(describeHttpFailure('emotion-vad failed', r.status, r.headers.get('X-Request-Id')))
       const data = await r.json() as {
         transcript: string
         fused: { valence: number, arousal: number, dominance: number }
       }
       text = (data.transcript ?? '').trim()
-      console.log('[localConv] transcript:', text, '| fused VAD:', data.fused)
+      console.info('[localConv] transcript:', text, '| fused VAD:', data.fused)
       // Notify caller so they can update the avatar expression
-      if (data.fused && onEmotion) {
+      if (!superseded() && data.fused && onEmotion) {
         onEmotion({ v: data.fused.valence, a: data.fused.arousal, d: data.fused.dominance })
       }
     }
     catch (e) {
-      console.error('[localConv] emotion-vad error:', e)
-      state.value = 'idle'
+      if (!superseded()) {
+        error.value = errorMessageFrom(e) ?? 'emotion-vad request failed'
+        state.value = 'idle'
+      }
       return
     }
 
-    if (!text || abort.signal.aborted) {
+    if (superseded())
+      return
+    if (!text) {
       state.value = 'idle'
       return
     }
@@ -158,7 +128,7 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
 
     // ── 2. Streaming RAG Chat + sentence-by-sentence TTS ─────────────────────
     state.value = 'thinking'
-    _ttsChain = Promise.resolve()
+    ttsQueue.reset()
 
     let response = ''
     let sentenceBuffer = ''
@@ -172,15 +142,23 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
         signal: abort.signal,
       })
       if (!r.ok)
-        throw new Error(`Chat failed (${r.status})`)
+        throw new Error(describeHttpFailure('Chat failed', r.status, r.headers.get('X-Request-Id')))
+      if (!r.body)
+        throw new Error('Chat stream response has no body')
 
-      const reader = r.body!.getReader()
+      const reader = r.body.getReader()
       const decoder = new TextDecoder()
       // SSE line buffer — a single network read may contain partial or multiple events
       let lineBuffer = ''
+      let streamDone = false
 
-      outer: while (true) {
+      while (!streamDone) {
         const { done, value } = await reader.read()
+        // A newer turn (or a barge-in) may have superseded this one while
+        // `read()` was in flight — a chunk that was already buffered can
+        // still resolve here even after `abort()` was called.
+        if (superseded())
+          return
         if (done)
           break
 
@@ -192,32 +170,39 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
         lineBuffer = lines.pop() ?? ''
 
         for (const line of lines) {
-          // Skip SSE comments (": ping") and blank lines
-          if (!line.startsWith('data: '))
-            continue
-          const payload = line.slice(6).trim()
-          if (payload === '[DONE]')
-            break outer
-          if (!payload)
+          const event = parseChatStreamLine(line)
+          if (!event)
             continue
 
-          let chunk: string
-          try {
-            chunk = (JSON.parse(payload) as { content: string }).content
+          if (event.type === 'done') {
+            streamDone = true
+            break
           }
-          catch {
+
+          if (event.type === 'error') {
+            // Backend still sends a `done` event after an in-band error —
+            // keep reading so the loop terminates normally instead of hanging.
+            error.value = event.message
             continue
           }
 
-          response += chunk
+          if (event.type === 'emotion') {
+            // Chat-turn emotion state isn't wired to the avatar yet — only the
+            // /emotion-vad user-turn analysis drives `onEmotion` today. Ignoring
+            // (rather than blindly reading `.content`) is what stops this event
+            // from corrupting `response` with a literal "undefined".
+            continue
+          }
+
+          response += event.content
           reply.value = response
-          sentenceBuffer += chunk
+          sentenceBuffer += event.content
 
           const [sentences, remaining] = extractSentences(sentenceBuffer)
           sentenceBuffer = remaining
 
           for (const sentence of sentences) {
-            _queueSentence(sentence, abort)
+            ttsQueue.enqueue(sentence, abort)
             if (!firstSentenceQueued) {
               firstSentenceQueued = true
               state.value = 'speaking'
@@ -226,16 +211,21 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
         }
       }
     }
-    catch {
-      if (!abort.signal.aborted)
+    catch (e) {
+      if (!superseded()) {
+        error.value = errorMessageFrom(e) ?? 'chat stream request failed'
         state.value = 'idle'
+      }
       return
     }
+
+    if (superseded())
+      return
 
     // Send any remaining text that didn't end with a terminator
     const tail = sentenceBuffer.trim()
     if (tail.length >= MIN_SENTENCE_LEN)
-      _queueSentence(tail, abort)
+      ttsQueue.enqueue(tail, abort)
 
     if (!response.trim()) {
       state.value = 'idle'
@@ -247,17 +237,18 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     if (!firstSentenceQueued) {
       // No sentence boundary hit — send entire response at once
       state.value = 'speaking'
-      _queueSentence(response.trim(), abort)
+      ttsQueue.enqueue(response.trim(), abort)
     }
 
-    await _ttsChain
+    await ttsQueue.drain()
 
-    if (!abort.signal.aborted && state.value === 'speaking')
+    if (!superseded() && state.value === 'speaking')
       state.value = 'idle'
   }
 
   function reset() {
     _stopAll()
+    _generation++
     state.value = 'idle'
     transcript.value = ''
     reply.value = ''
