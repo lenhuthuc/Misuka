@@ -159,6 +159,33 @@ export function mapStatus(vue: 'OPEN' | 'CONNECTING' | 'CLOSED', enabled: boolea
 }
 
 /**
+ * Eventa's native adapter assumes every JSON frame has `payload.body` and
+ * dereferences it without validating the envelope. Keep malformed/proxy error
+ * frames out of the adapter so one bad frame cannot throw from `onmessage`.
+ *
+ * @internal
+ */
+export function isEventaWebSocketEnvelope(data: unknown): boolean {
+  if (typeof data !== 'string')
+    return false
+
+  try {
+    const value: unknown = JSON.parse(data)
+    return typeof value === 'object'
+      && value !== null
+      && 'type' in value
+      && typeof value.type === 'string'
+      && 'payload' in value
+      && typeof value.payload === 'object'
+      && value.payload !== null
+      && 'body' in value.payload
+  }
+  catch {
+    return false
+  }
+}
+
+/**
  * Create a chat-sync WebSocket client backed by VueUse's `useWebSocket` plus
  * eventa's native ws adapter for the eventa context that handles RPC and
  * outbound subscription routing.
@@ -287,6 +314,14 @@ export function createChatWsClient(options: CreateChatWsClientOptions): ChatWsCl
     },
     onConnected(rawWs) {
       const created = createWsContext(rawWs)
+      const eventaOnMessage = rawWs.onmessage
+      rawWs.onmessage = (event) => {
+        if (!isEventaWebSocketEnvelope(event.data)) {
+          console.warn('[chat-ws] dropped malformed websocket frame:', event.data)
+          return
+        }
+        eventaOnMessage?.call(rawWs, event)
+      }
       context.value = created.context
       attachContextListeners(created.context)
     },

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 
@@ -29,7 +30,16 @@ async def transcriptions(
         tmp_path = tmp.name
 
     try:
-        text = container.whisper.transcribe(tmp_path, language=language)
+        # faster-whisper is synchronous and CPU-heavy. Running it on the
+        # request event loop freezes health checks and every other API route.
+        loop = asyncio.get_running_loop()
+        text = await loop.run_in_executor(
+            container.emotion_executor,
+            container.whisper.transcribe,
+            tmp_path,
+            language,
+            prompt,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:

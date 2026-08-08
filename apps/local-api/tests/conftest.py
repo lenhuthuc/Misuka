@@ -20,8 +20,10 @@ if str(VAD_ROOT) not in sys.path:
     sys.path.insert(0, str(VAD_ROOT))
 
 import main  # noqa: E402
+from brain.curator import MemoryCurator  # noqa: E402
 from brain.emotion_service import EmotionService  # noqa: E402
 from core.container import ServiceContainer  # noqa: E402
+from core.llm_priority import LLMPriorityGate  # noqa: E402
 from core.tasks import BackgroundTaskRegistry  # noqa: E402
 from core.tts_coordinator import TTSInterruptCoordinator  # noqa: E402
 
@@ -44,7 +46,12 @@ class FakeWhisperService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []  # (audio_path, language)
 
-    def transcribe(self, audio_path: str, language: str | None = "en") -> str:
+    def transcribe(
+        self,
+        audio_path: str,
+        language: str | None = "en",
+        prompt: str | None = None,
+    ) -> str:
         self.calls.append((audio_path, language))
         return "fake transcript"
 
@@ -81,12 +88,12 @@ class FakeLLMService:
         response_text: str = "Xin chao, toi la tro ly ao.",
         stream_chunks: list[str] | None = None,
         stream_error: Exception | None = None,
-        decide_answer: str = "NO",
+        generate_reply: str = "NO",
     ) -> None:
         self.response_text = response_text
         self.stream_chunks = stream_chunks if stream_chunks is not None else ["Xin ", "chao", "!"]
         self.stream_error = stream_error
-        self.decide_answer = decide_answer
+        self.generate_reply = generate_reply
         self.generate_calls: list[str] = []
 
     async def chat(self, messages) -> str:
@@ -100,7 +107,7 @@ class FakeLLMService:
 
     async def generate(self, prompt: str) -> str:
         self.generate_calls.append(prompt)
-        return self.decide_answer
+        return self.generate_reply
 
     async def aclose(self) -> None:
         pass
@@ -110,15 +117,51 @@ class FakeMemoryService:
     def __init__(self) -> None:
         self.messages: list[dict] = []
         self.facts: dict[str, str] = {}
+        self.curation_queue: list[dict] = []
+        self._next_curation_id = 1
 
     async def get_recent(self, limit: int) -> list[dict]:
         return self.messages[-limit:]
 
     async def save_message(self, role: str, content: str, vad=None, emotion=None) -> None:
-        self.messages.append({"role": role, "content": content, "vad": vad, "emotion": emotion})
+        # A timestamp is not incidental here: `prepare_turn` reads it to tell the
+        # retriever which turns the history window already covers.
+        self.messages.append({
+            "role": role, "content": content, "vad": vad, "emotion": emotion,
+            "timestamp": f"2026-08-09T00:00:{len(self.messages):02d}+00:00",
+        })
 
     async def upsert_fact(self, key: str, value: str) -> None:
         self.facts[key] = value
+
+    async def list_facts(self) -> list[dict]:
+        return [{"key": k, "value": v} for k, v in self.facts.items()]
+
+    async def enqueue_curation(self, query: str, response: str, emotion=None, vad=None) -> int:
+        row_id = self._next_curation_id
+        self._next_curation_id += 1
+        v, a, d = vad if vad else (None, None, None)
+        self.curation_queue.append({
+            "id": row_id, "query": query, "response": response, "emotion": emotion,
+            "valence": v, "arousal": a, "dominance": d,
+            "created_at": "2026-08-09T00:00:00+00:00", "attempts": 0,
+        })
+        return row_id
+
+    async def next_curation_batch(self, limit: int, max_attempts: int = 3) -> list[dict]:
+        eligible = [r for r in self.curation_queue if r["attempts"] < max_attempts]
+        return eligible[:limit]
+
+    async def complete_curation(self, ids: list[int]) -> None:
+        self.curation_queue = [r for r in self.curation_queue if r["id"] not in ids]
+
+    async def record_curation_failure(self, ids: list[int]) -> None:
+        for row in self.curation_queue:
+            if row["id"] in ids:
+                row["attempts"] += 1
+
+    async def pending_curation_count(self, max_attempts: int = 3) -> int:
+        return len([r for r in self.curation_queue if r["attempts"] < max_attempts])
 
     async def close(self) -> None:
         pass
@@ -127,9 +170,11 @@ class FakeMemoryService:
 class FakeVectorService:
     def __init__(self) -> None:
         self.upserted: list[tuple[list[str], list[dict]]] = []
+        self._next_id = 0
 
     async def upsert(self, texts: list[str], metas: list[dict]) -> list[str]:
-        ids = [str(i) for i in range(len(texts))]
+        ids = [f"point-{self._next_id + i}" for i in range(len(texts))]
+        self._next_id += len(texts)
         self.upserted.append((texts, metas))
         return ids
 
@@ -141,8 +186,12 @@ class FakeRAGService:
     def __init__(self, docs: list[dict] | None = None, context: str = "fake context") -> None:
         self.docs = docs if docs is not None else []
         self.context = context
+        # Records what the turn said its history window already covers, so tests
+        # can assert the retriever is told to skip duplicated turns.
+        self.covered_since_calls: list[str | None] = []
 
-    async def build_context(self, query: str):
+    async def build_context(self, query: str, covered_since: str | None = None):
+        self.covered_since_calls.append(covered_since)
         return [], self.docs, self.context
 
 
@@ -161,6 +210,13 @@ class FakeBrainBundle:
         self.memory = FakeMemoryService()
         self.vector = FakeVectorService()
         self.rag = FakeRAGService()
+        self.curator_llm = FakeLLMService()
+        self.llm_gate = LLMPriorityGate(settle_seconds=0.0)
+        # Constructed but never started: routes only ever call `notify()` on it,
+        # and a running drain loop would race every assertion in the suite.
+        self.curator = MemoryCurator(
+            memory=self.memory, llm=self.curator_llm, gate=self.llm_gate,
+        )
 
     def build_container(self) -> ServiceContainer:
         return ServiceContainer(
@@ -174,9 +230,16 @@ class FakeBrainBundle:
             rag=self.rag,
             emotion=EmotionService(self.vad),
             memory_recent_limit=10,
+            memory_recent_char_budget=3000,
+            memory_facts_char_budget=600,
             emotion_executor=ThreadPoolExecutor(max_workers=2),
             tts_coordinator=TTSInterruptCoordinator(),
             tasks=BackgroundTaskRegistry(),
+            # Near-zero settle so gated background work in tests does not add
+            # real wall-clock delay to every chat assertion.
+            llm_gate=self.llm_gate,
+            curator=self.curator,
+            curator_llm=self.curator_llm,
         )
 
 

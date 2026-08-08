@@ -22,6 +22,7 @@ apps/local-api/vad_bert_final.pt
 
 # Runtime data
 apps/local-api/data/*.db
+apps/local-api/debug_audio/
 
 # Editor / OS
 .vscode/

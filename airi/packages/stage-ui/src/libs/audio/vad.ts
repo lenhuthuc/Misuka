@@ -61,6 +61,7 @@ export function createVADStates(vad: BaseVAD, vadAudioWorkletUrl: string, option
   let mediaStream: MediaStream | null
   let sourceNode: MediaStreamAudioSourceNode | null
   let workletInitialized: boolean
+  let processingChain: Promise<void> = Promise.resolve()
 
   const {
     audioContextOptions = {
@@ -83,10 +84,16 @@ export function createVADStates(vad: BaseVAD, vadAudioWorkletUrl: string, option
       }
 
       audioWorkletNode = new AudioWorkletNode(audioContext, 'vad-audio-worklet-processor')
-      audioWorkletNode.port.onmessage = async (event) => {
+      audioWorkletNode.port.onmessage = (event) => {
         const { buffer } = event.data
         if (buffer && buffer.length > 0) {
-          await vad.processAudio(new Float32Array(buffer))
+          // Serialize the entire stateful VAD operation. Running async message
+          // handlers concurrently made multiple chunks observe stale
+          // `isRecording`/buffer state and truncated speech segments.
+          const samples = new Float32Array(buffer)
+          processingChain = processingChain
+            .then(() => vad.processAudio(samples))
+            .catch(error => console.error('Failed to process VAD audio chunk:', error))
         }
       }
     }

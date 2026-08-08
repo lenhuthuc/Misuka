@@ -50,3 +50,32 @@ export function encodeWav(samples: Float32Array, sampleRate: number): Blob {
 
   return new Blob([buffer], { type: 'audio/wav' })
 }
+
+/** Raise quiet microphone PCM to a useful level without clipping. */
+export function normalizeSpeechSamples(
+  samples: Float32Array,
+  targetPeak = 0.9,
+  maxGain = 24,
+): Float32Array {
+  if (samples.length === 0)
+    return new Float32Array()
+
+  let mean = 0
+  for (const sample of samples)
+    mean += sample
+  mean /= samples.length
+
+  let peak = 0
+  for (const sample of samples)
+    peak = Math.max(peak, Math.abs(sample - mean))
+
+  if (peak < 1e-6)
+    return new Float32Array(samples.length)
+
+  const gain = Math.min(maxGain, targetPeak / peak)
+  const normalized = new Float32Array(samples.length)
+  for (let i = 0; i < samples.length; i++)
+    normalized[i] = Math.max(-1, Math.min(1, (samples[i] - mean) * gain))
+
+  return normalized
+}

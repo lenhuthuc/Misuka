@@ -32,3 +32,8 @@ def test_resolved_vad_model_path_stays_inside_apps_local_api():
 def test_whisper_models_dir_stays_inside_apps_local_api():
     settings = Settings()
     assert settings.whisper_models_dir == settings.base_dir / "models"
+
+
+def test_default_whisper_model_is_optimized_for_english_cpu_usage():
+    settings = Settings()
+    assert settings.whisper_model == "small.en"

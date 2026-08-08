@@ -13,7 +13,7 @@ import { useBackgroundStore } from '@proj-airi/stage-layouts/stores/background'
 import { HoloCoupon } from '@proj-airi/stage-ui/components'
 import { ViewControlSlider, WidgetStage } from '@proj-airi/stage-ui/components/scenes'
 import { useAudioRecorder } from '@proj-airi/stage-ui/composables/audio/audio-recorder'
-import { encodeWav } from '@proj-airi/stage-ui/composables/audio/wav-encoder'
+import { encodeWav, normalizeSpeechSamples } from '@proj-airi/stage-ui/composables/audio/wav-encoder'
 import { useLocalConversation } from '@proj-airi/stage-ui/composables/local-conversation'
 import { useVAD } from '@proj-airi/stage-ui/stores/ai/models/vad'
 import { useChatOrchestratorStore } from '@proj-airi/stage-ui/stores/chat'
@@ -83,7 +83,8 @@ const {
   start: startVAD,
   loaded: vadLoaded,
 } = useVAD(workletUrl, {
-  threshold: ref(0.6),
+  threshold: ref(0.45),
+  minSilenceDurationMs: ref(900),
   onSpeechStart: () => {
     if (localMode.value)
       localConv.onSpeechStart()
@@ -94,11 +95,11 @@ const {
     console.info('[VAD] speech-ready | localMode:', localMode.value, '| samples:', buffer.length)
     if (!localMode.value)
       return
-    // Use VAD buffer directly — already 16kHz mono, bypasses mediabunny entirely
-    const wav = encodeWav(buffer, 16000)
-    console.info('[VAD] wav blob size:', wav.size)
-    // emotion-vad + STT handled together inside localConv.process()
-    localConv.process(wav)
+
+    const normalized = normalizeSpeechSamples(buffer)
+    const wav = encodeWav(normalized, 16000)
+    console.info('[VAD] normalized wav blob size:', wav.size)
+    void localConv.process(wav)
   },
 })
 
@@ -113,9 +114,9 @@ async function startAudioInteraction() {
     // Hook once
     stopOnStopRecord = onStopRecord(async (recording) => {
       if (localMode.value) {
-        // Local mode uses onSpeechReady (VAD buffer → encodeWav) instead.
-        // onStopRecord fires from mediabunny which we still let run for non-local mode;
-        // in local mode we just skip it here to avoid double-processing.
+        // Local mode uses the serialized VAD segment above because it includes
+        // pre-speech padding. The recorder starts only after detection and
+        // therefore loses the beginning of short utterances.
         return
       }
 

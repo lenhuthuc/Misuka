@@ -1,52 +1,46 @@
-"""Post-response background tasks: save conversation turn, decide whether to extract facts."""
+"""Post-response work for a chat turn: persist it, index it, queue it for curation.
+
+Everything here runs after the HTTP response has been returned, and — by
+design — none of it calls the LLM. The distillation that used to happen inline
+now belongs to `brain.curator`, because on this CPU the runner is serialised:
+an LLM call issued here lands in front of the user's next turn. Measured over a
+five-turn conversation, every inline extraction attempt was either blocking or
+abandoned, so nothing was ever extracted. Enqueuing instead makes the work
+durable and lets the curator batch it.
+"""
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from brain.curator import MemoryCurator
     from brain.emotion_service import EmotionReading
-    from brain.llm_service import LLMService
     from brain.memory_service import MemoryService
     from brain.vector_service import VectorService
 
 logger = logging.getLogger(__name__)
-
-_DECIDE_PROMPT = """\
-Does the following conversation contain facts worth remembering long-term?
-Worth remembering: user preferences, named entities, system config, technical facts.
-NOT worth remembering: greetings, simple yes/no, transient context.
-
-User: {query}
-Assistant: {response}
-
-Answer YES or NO only."""
-
-_FACT_EXTRACTION_PROMPT = """\
-Extract at most 3 important, reusable facts from this conversation exchange.
-Output each fact as "key: value" on its own line. Skip trivial or context-dependent details.
-If there are no useful facts, output NONE.
-
-User: {query}
-Assistant: {response}
-"""
 
 
 async def run_memory_tasks(
     query: str,
     response: str,
     memory: "MemoryService",
-    llm: "LLMService",
     emotion: "EmotionReading | None" = None,
     vector: "VectorService | None" = None,
+    curator: "MemoryCurator | None" = None,
 ) -> None:
-    """Save conversation turn (with the response's V/A/D + emotion), index the
-    exchange as a retrievable memory, and optionally extract long-term facts.
+    """Save the turn, index it for retrieval, and queue it for fact extraction.
 
-    Runs entirely after the HTTP response has been returned to the client —
-    latency here does not affect the user.
+    Use when: a chat turn has finished and its response has been sent.
+
+    Expects: to be spawned as a background task, never awaited by a request.
+
+    Indexing here costs only an embedding, so it happens immediately and the
+    exchange is retrievable straight away. The curator's work is queued rather
+    than done here because it needs the LLM runner, which belongs to whoever is
+    waiting on a reply.
     """
     try:
         await memory.save_message("user", query)
@@ -60,8 +54,6 @@ async def run_memory_tasks(
         logger.exception("background | failed to save conversation")
         return
 
-    # Index the exchange in Qdrant so RAG retrieval returns the response along
-    # with its V/A/D + emotion label.
     if vector is not None:
         try:
             meta: dict = {
@@ -77,23 +69,12 @@ async def run_memory_tasks(
             logger.exception("background | failed to index exchange")
 
     try:
-        raw = await llm.generate(_DECIDE_PROMPT.format(query=query, response=response))
-        should_save = raw.strip().upper().startswith("YES")
+        await memory.enqueue_curation(
+            query, response,
+            emotion=emotion.emotion if emotion else None,
+            vad=emotion.vad if emotion else None,
+        )
+        if curator is not None:
+            curator.notify()
     except Exception:
-        logger.exception("background | decide LLM failed, skipping fact extraction")
-        return
-
-    if not should_save:
-        return
-
-    try:
-        raw = await llm.generate(_FACT_EXTRACTION_PROMPT.format(query=query, response=response))
-        if raw.strip().upper() != "NONE":
-            for line in raw.strip().splitlines():
-                m = re.match(r"^(.+?):\s*(.+)$", line.strip())
-                if m:
-                    key, value = m.group(1).strip(), m.group(2).strip()
-                    await memory.upsert_fact(key, value)
-                    logger.debug("background | upserted fact '%s'", key)
-    except Exception:
-        logger.exception("background | fact extraction failed")
+        logger.exception("background | failed to enqueue curation")

@@ -17,18 +17,16 @@ interface UseVADOptions {
   onSpeechReady?: (buffer: Float32Array, duration: number) => void
 }
 
-const DEFAULT_VAD_THRESHOLD = 0.65
-const DEFAULT_VAD_MIN_SILENCE_DURATION_MS = 600
-const DEFAULT_VAD_MIN_SPEECH_DURATION_MS = 400
+const DEFAULT_VAD_THRESHOLD = 0.6
+const DEFAULT_VAD_MIN_SILENCE_DURATION_MS = 800
 
-export function resolveVADConfig(threshold?: number, minSilenceDurationMs?: number): Pick<BaseVADConfig, 'speechThreshold' | 'exitThreshold' | 'minSilenceDurationMs' | 'minSpeechDurationMs'> {
+export function resolveVADConfig(threshold?: number, minSilenceDurationMs?: number): Pick<BaseVADConfig, 'speechThreshold' | 'exitThreshold' | 'minSilenceDurationMs'> {
   const resolvedThreshold = threshold ?? DEFAULT_VAD_THRESHOLD
 
   return {
     speechThreshold: resolvedThreshold,
     exitThreshold: resolvedThreshold * 0.3,
     minSilenceDurationMs: minSilenceDurationMs ?? DEFAULT_VAD_MIN_SILENCE_DURATION_MS,
-    minSpeechDurationMs: DEFAULT_VAD_MIN_SPEECH_DURATION_MS,
   }
 }
 

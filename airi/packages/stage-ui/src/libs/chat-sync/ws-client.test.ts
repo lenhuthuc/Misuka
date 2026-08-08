@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ref } from 'vue'
 
-import { buildChatWsUrl, computeReconnectDelay, createChatWsUrlRef, mapStatus, WS_CLOSE_UNAUTHORIZED } from './ws-client'
+import { buildChatWsUrl, computeReconnectDelay, createChatWsUrlRef, isEventaWebSocketEnvelope, mapStatus, WS_CLOSE_UNAUTHORIZED } from './ws-client'
 
 describe('buildChatWsUrl', () => {
   /**
@@ -105,6 +105,21 @@ describe('mapStatus', () => {
   it('distinguishes closed (auto-reconnect pending) from idle (user intent off)', () => {
     expect(mapStatus('CLOSED', true)).toBe('closed')
     expect(mapStatus('CLOSED', false)).toBe('idle')
+  })
+})
+
+describe('isEventaWebSocketEnvelope', () => {
+  it('accepts eventa frames whose body is explicitly null', () => {
+    expect(isEventaWebSocketEnvelope(JSON.stringify({
+      type: 'chat:new-messages',
+      payload: { body: null },
+    }))).toBe(true)
+  })
+
+  it('rejects the missing payload that caused the adapter body dereference error', () => {
+    expect(isEventaWebSocketEnvelope(JSON.stringify({ type: 'error' }))).toBe(false)
+    expect(isEventaWebSocketEnvelope('{not-json')).toBe(false)
+    expect(isEventaWebSocketEnvelope(new ArrayBuffer(0))).toBe(false)
   })
 })
 

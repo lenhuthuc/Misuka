@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import tempfile
+from pathlib import Path
 
 import librosa
 import numpy as np
@@ -30,6 +31,16 @@ router = APIRouter(prefix="/emotion-vad", tags=["Emotion VAD"])
 
 _AUDIO_WEIGHT = 0.7
 _TEXT_WEIGHT  = 0.3
+_DEBUG_AUDIO_DIR = Path(__file__).resolve().parents[1] / "debug_audio"
+
+
+def _save_raw_whisper_input(raw: bytes) -> Path:
+    """Persist the exact upload before soundfile/resampling/Whisper touches it."""
+    _DEBUG_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    target = _DEBUG_AUDIO_DIR / "last-whisper-input.wav"
+    target.write_bytes(raw)
+    logger.info("Saved raw Whisper input to %s (%d bytes)", target, len(raw))
+    return target
 
 
 def _scale_to_signed(v: float, a: float, d: float) -> VADScores:
@@ -54,6 +65,8 @@ async def emotion_vad(
     raw = await audio_file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty audio file.")
+
+    _save_raw_whisper_input(raw)
 
     try:
         audio_array, orig_sr = sf.read(io.BytesIO(raw))

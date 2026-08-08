@@ -73,12 +73,15 @@ def _log_rag_error(operation: str) -> Callable[[Exception], None]:
 async def chat(body: ChatRequest, container: ServiceContainer = Depends(get_container)) -> ChatResponse:
     turn_id = str(uuid.uuid4())
     with bind_turn_id(turn_id):
-        turn = await prepare_turn(
-            body.query, container.memory, container.rag, container.memory_recent_limit,
-            on_rag_error=_log_rag_error("chat"),
-        )
-        with log_duration(logger, "llm.chat", component="llm"):
-            response_text = await container.llm.chat(turn.messages)
+        async with container.llm_gate.foreground():
+            turn = await prepare_turn(
+                body.query, container.memory, container.rag, container.memory_recent_limit,
+                history_char_budget=container.memory_recent_char_budget,
+                facts_char_budget=container.memory_facts_char_budget,
+                on_rag_error=_log_rag_error("chat"),
+            )
+            with log_duration(logger, "llm.chat", component="llm"):
+                response_text = await container.llm.chat(turn.messages)
 
         reading, state = await _emotion_state(container.emotion, response_text, turn.retrieved_docs)
 
@@ -88,8 +91,8 @@ async def chat(body: ChatRequest, container: ServiceContainer = Depends(get_cont
         # task's own log lines (see core/tasks.py) inherit it too.
         container.tasks.spawn(
             run_memory_tasks(
-                body.query, response_text, container.memory, container.llm,
-                emotion=reading, vector=container.vector,
+                body.query, response_text, container.memory,
+                emotion=reading, vector=container.vector, curator=container.curator,
             ),
             name="chat.memory_tasks",
         )
@@ -122,20 +125,26 @@ async def chat_stream(body: ChatRequest, container: ServiceContainer = Depends(g
             full_response = ""
             docs: list = []
             try:
-                turn = await prepare_turn(
-                    body.query, container.memory, container.rag, container.memory_recent_limit,
-                    on_rag_error=_log_rag_error("chat_stream"),
-                )
-                docs = turn.retrieved_docs
+                # Gate covers retrieval too, not just the stream: RAG takes long
+                # enough that a background generation slipping in during it would
+                # still land in front of this turn's first token.
+                async with container.llm_gate.foreground():
+                    turn = await prepare_turn(
+                        body.query, container.memory, container.rag, container.memory_recent_limit,
+                        history_char_budget=container.memory_recent_char_budget,
+                        facts_char_budget=container.memory_facts_char_budget,
+                        on_rag_error=_log_rag_error("chat_stream"),
+                    )
+                    docs = turn.retrieved_docs
 
-                stream_start_logged = False
-                async for chunk in container.llm.stream_chat(turn.messages):
-                    if not stream_start_logged:
-                        logger.debug("llm.stream_chat | first token received", extra={"component": "llm"})
-                        stream_start_logged = True
-                    full_response += chunk
-                    event = ChatStreamDeltaEvent(turn_id=turn_id, content=chunk)
-                    yield f"data: {event.model_dump_json()}\n\n"
+                    stream_start_logged = False
+                    async for chunk in container.llm.stream_chat(turn.messages):
+                        if not stream_start_logged:
+                            logger.debug("llm.stream_chat | first token received", extra={"component": "llm"})
+                            stream_start_logged = True
+                        full_response += chunk
+                        event = ChatStreamDeltaEvent(turn_id=turn_id, content=chunk)
+                        yield f"data: {event.model_dump_json()}\n\n"
 
             except Exception as exc:
                 logger.exception("chat_stream | LLM stream failed")
@@ -165,8 +174,8 @@ async def chat_stream(body: ChatRequest, container: ServiceContainer = Depends(g
             if full_response:
                 container.tasks.spawn(
                     run_memory_tasks(
-                        body.query, full_response, container.memory, container.llm,
-                        emotion=reading, vector=container.vector,
+                        body.query, full_response, container.memory,
+                        emotion=reading, vector=container.vector, curator=container.curator,
                     ),
                     name="chat_stream.memory_tasks",
                 )

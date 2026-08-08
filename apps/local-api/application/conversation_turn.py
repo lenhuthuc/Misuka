@@ -11,12 +11,15 @@ lệch nhau") — this module is the single place that policy now lives.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from brain.nodes.generate import build_messages
 from brain.nodes.should_rag import should_use_rag
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from brain.memory_service import MemoryService
@@ -39,6 +42,8 @@ async def prepare_turn(
     rag: "RAGService",
     recent_limit: int = 10,
     on_rag_error: Callable[[Exception], None] | None = None,
+    history_char_budget: int = 3000,
+    facts_char_budget: int = 600,
 ) -> TurnContext:
     """Run the RAG-decision + retrieval + message-building steps shared by
     every chat turn.
@@ -52,12 +57,36 @@ async def prepare_turn(
     retrieved_docs: "list[RetrievedDoc]" = []
     context = ""
 
+    recent = await memory.get_recent(recent_limit)
+    # Oldest message the prompt already carries verbatim; anything the retriever
+    # finds from at or after this point is a duplicate of the history window.
+    covered_since = recent[0]["timestamp"] if recent else None
+
     if should_use_rag(query):
         try:
-            generated_queries, retrieved_docs, context = await rag.build_context(query)
+            generated_queries, retrieved_docs, context = await rag.build_context(
+                query, covered_since=covered_since,
+            )
         except Exception as exc:
             if on_rag_error:
                 on_rag_error(exc)
 
-    messages = await build_messages(query, context, memory, recent_limit)
+    # Facts are what survives beyond the history window and the vector store's
+    # per-session churn, so they are fetched for every turn rather than only
+    # when retrieval fires.
+    facts = await memory.list_facts()
+    messages = build_messages(
+        query, context, recent, history_char_budget, facts, facts_char_budget,
+    )
+
+    # Prefill cost is linear in prompt size and dominates time-to-first-token on
+    # a CPU runner, so the prompt budget is a latency number worth watching --
+    # not just a context-window concern.
+    context_chars = len(context)
+    total_chars = sum(len(m["content"]) for m in messages)
+    logger.info(
+        "turn prompt | messages=%d docs=%d facts=%d context_chars=%d total_chars=%d",
+        len(messages), len(retrieved_docs), len(facts), context_chars, total_chars,
+    )
+
     return TurnContext(messages=messages, generated_queries=generated_queries, retrieved_docs=retrieved_docs)
