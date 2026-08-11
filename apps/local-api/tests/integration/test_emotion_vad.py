@@ -62,3 +62,51 @@ async def test_emotion_vad_undecodable_audio_returns_422(client):
         files={"audio": ("segment.wav", b"not a real wav file", "audio/wav")},
     )
     assert resp.status_code == 422
+
+
+async def test_emotion_vad_abandons_background_llm_work_before_the_turn_arrives(
+    fake_brain_bundle, client, monkeypatch,
+):
+    """ROOT CAUSE: background work was only interrupted once `/v1/chat` opened
+    the gate — a whole transcription later. By then it had been holding Ollama's
+    single runner for the entire duration of Whisper.
+
+    This request *is* the user speaking, so it is the earliest honest signal.
+    """
+    import asyncio
+
+    gate = fake_brain_bundle.llm_gate
+    progress: list[str] = []
+
+    async def slow_background_work():
+        progress.append("started")
+        await asyncio.sleep(5.0)
+        progress.append("should-not-reach")
+
+    runner = asyncio.create_task(gate.run_when_idle(slow_background_work, timeout=2.0))
+    await asyncio.sleep(0.05)
+    assert progress == ["started"]
+
+    resp = await client.post(
+        "/emotion-vad",
+        files={"audio": ("segment.wav", make_wav_bytes(), "audio/wav")},
+    )
+
+    assert resp.status_code == 200
+    assert await runner is False
+    assert progress == ["started"]
+
+
+async def test_emotion_vad_drops_a_playback_reservation_it_interrupted(fake_brain_bundle, client):
+    """@example: the user talks over a long reply -> the reservation for audio
+    that barge-in already stopped does not keep blocking curation."""
+    gate = fake_brain_bundle.llm_gate
+    gate.hold_active(300.0)
+
+    resp = await client.post(
+        "/emotion-vad",
+        files={"audio": ("segment.wav", make_wav_bytes(), "audio/wav")},
+    )
+
+    assert resp.status_code == 200
+    assert await gate.wait_until_idle(timeout=1.0) is True

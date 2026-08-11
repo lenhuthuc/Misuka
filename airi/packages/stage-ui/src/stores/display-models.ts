@@ -19,9 +19,11 @@ export type DisplayModel
   = | DisplayModelFile
     | DisplayModelURL
 
-const presetLive2dProUrl = new URL('../assets/live2d/models/hiyori_pro_zh.zip', import.meta.url).href
-const presetLive2dFreeUrl = new URL('../assets/live2d/models/hiyori_free_zh.zip', import.meta.url).href
-const presetLive2dPreview = new URL('../assets/live2d/models/hiyori/preview.png', import.meta.url).href
+// Unlike `assets/live2d/models/*` (gitignored, fetched at build time by the
+// upstream Download plugin), the preset lives in the repository so a clone
+// renders the stage offline. Rebuild it with
+// `node packages/stage-ui-live2d/scripts/pack-live2d-preset.mjs`.
+const presetLive2dUrl = new URL('../assets/live2d/preset/tiredgirl.zip', import.meta.url).href
 const presetVrmAvatarAUrl = new URL('../assets/vrm/models/AvatarSample-A/AvatarSample_A.vrm', import.meta.url).href
 const presetVrmAvatarAPreview = new URL('../assets/vrm/models/AvatarSample-A/preview.png', import.meta.url).href
 const presetVrmAvatarBUrl = new URL('../assets/vrm/models/AvatarSample-B/AvatarSample_B.vrm', import.meta.url).href
@@ -48,8 +50,9 @@ export interface DisplayModelURL {
 }
 
 const displayModelsPresets: DisplayModel[] = [
-  { id: 'preset-live2d-1', format: DisplayModelFormat.Live2dZip, type: 'url', url: presetLive2dProUrl, name: 'Hiyori (Pro)', previewImage: presetLive2dPreview, importedAt: 1733113886840 },
-  { id: 'preset-live2d-2', format: DisplayModelFormat.Live2dZip, type: 'url', url: presetLive2dFreeUrl, name: 'Hiyori (Free)', previewImage: presetLive2dPreview, importedAt: 1733113886840 },
+  // `preset-live2d-1` is the id `settings/stage/model` defaults to — keep it
+  // stable so existing installs pick up the new model instead of a blank stage.
+  { id: 'preset-live2d-1', format: DisplayModelFormat.Live2dZip, type: 'url', url: presetLive2dUrl, name: 'Mitsuka', importedAt: 1733113886840 },
   { id: 'preset-vrm-1', format: DisplayModelFormat.VRM, type: 'url', url: presetVrmAvatarAUrl, name: 'AvatarSample_A', previewImage: presetVrmAvatarAPreview, importedAt: 1733113886840 },
   { id: 'preset-vrm-2', format: DisplayModelFormat.VRM, type: 'url', url: presetVrmAvatarBUrl, name: 'AvatarSample_B', previewImage: presetVrmAvatarBPreview, importedAt: 1733113886840 },
 ]
@@ -183,6 +186,9 @@ export const useDisplayModelsStore = defineStore('display-models', () => {
   async function initialize() {
     await import('@proj-airi/stage-ui-live2d/utils/live2d-zip-loader')
     await import('@proj-airi/stage-ui-live2d/utils/live2d-opfs-registration')
+    // Preview generation builds a real Live2D model too, so it needs the
+    // Cubism Core 6 shim just like the stage does.
+    await import('@proj-airi/stage-ui-live2d/utils/live2d-core-compat')
 
     const { loadLive2DModelPreview } = await import('@proj-airi/stage-ui-live2d/utils/live2d-preview')
     const { loadVrmModelPreview } = await import('@proj-airi/stage-ui-three/utils/vrm-preview')

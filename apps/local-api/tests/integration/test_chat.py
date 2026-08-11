@@ -45,6 +45,21 @@ async def test_chat_success_schedules_background_memory_save(client, fake_brain_
     assert roles == ["user", "assistant"]
 
 
+async def test_chat_vad_controls_policy_without_raw_scores_in_prompt(client, fake_brain_bundle):
+    vad = {"valence": -0.7, "arousal": 0.9, "dominance": -0.6}
+
+    resp = await client.post("/v1/chat", json={"query": "toi roi", "user_vad": vad})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["response_policy"]["max_tokens"] == 256
+    assert body["response_policy"]["stream_pace"] == "immediate"
+    messages, options = fake_brain_bundle.llm.chat_calls[-1]
+    assert options == {"temperature": 0.55, "num_predict": 256}
+    assert "Response style: brief" in messages[0]["content"]
+    assert "-0.7" not in messages[0]["content"]
+
+
 async def test_seed_endpoint_inserts_docs(client, fake_brain_bundle):
     resp = await client.post("/v1/chat/seed")
     assert resp.status_code == 200

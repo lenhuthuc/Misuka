@@ -3,16 +3,16 @@ from __future__ import annotations
 # Block order is a latency decision, not a stylistic one. Ollama caches the
 # longest matching prompt prefix, so a block placed before one that churns is
 # re-prefilled along with it. These are ordered most-stable first: facts change
-# only when the curator learns something, emotion changes almost every turn, and
+# only when the curator learns something, response policy changes per turn, and
 # retrieved context changes whenever retrieval fires.
 #
 # Measured on this setup with the same 606-character facts block: placing it
-# after the emotion line cost 1.879s of prefill per turn, before it 0.859s.
+# before a changing per-turn block avoids re-prefilling the facts every turn.
 SYSTEM_PROMPT = """\
 You are BrainMaster, a helpful and knowledgeable assistant.
 Use the provided context to answer the user's question accurately and concisely.
 If the context does not contain enough information, say so honestly.
-{facts_block}{emotion_line}
+{facts_block}{response_policy_line}
 Context:
 {context}
 """
@@ -38,14 +38,6 @@ def _fit_facts(facts: list[dict], char_budget: int) -> str:
     if not lines:
         return ""
     return "What you know about the user:\n" + "\n".join(lines) + "\n"
-
-
-def _last_assistant_emotion(recent: list[dict]) -> str | None:
-    """Most recent stored emotion label — the agent's current mood carried over."""
-    return next(
-        (row["emotion"] for row in reversed(recent) if row["role"] == "assistant" and row.get("emotion")),
-        None,
-    )
 
 
 def _fit_history(recent: list[dict], char_budget: int) -> list[dict[str, str]]:
@@ -76,6 +68,7 @@ def build_messages(
     history_char_budget: int = 3000,
     facts: list[dict] | None = None,
     facts_char_budget: int = 600,
+    response_policy_instruction: str = "",
 ) -> list[dict[str, str]]:
     """Build the full message list for a chat completion call.
 
@@ -87,14 +80,14 @@ def build_messages(
     context, and facts — because prefill cost is linear in prompt length and
     each of these grows on a different schedule.
 
-    Emotion is still read from the full window, so trimming for latency never
-    silently resets the agent's carried-over mood.
+    Stored output emotion remains metadata for memory and UI. It is not fed
+    back as a fixed mood prompt; the current user's VAD produces the small
+    behavioural policy passed in by the turn orchestrator.
     """
     history = _fit_history(recent, history_char_budget)
-    emotion = _last_assistant_emotion(recent)
-    emotion_line = f"Your current emotional state is: {emotion}.\n" if emotion else ""
     facts_block = _fit_facts(facts or [], facts_char_budget)
+    response_policy_line = f"{response_policy_instruction}\n" if response_policy_instruction else ""
     system = SYSTEM_PROMPT.format(
-        context=context, emotion_line=emotion_line, facts_block=facts_block,
+        context=context, response_policy_line=response_policy_line, facts_block=facts_block,
     )
     return [{"role": "system", "content": system}] + history + [{"role": "user", "content": query}]

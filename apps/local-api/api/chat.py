@@ -13,6 +13,7 @@ from application.conversation_turn import prepare_turn
 from brain.app import SEED_DOCS
 from brain.background import run_memory_tasks
 from brain.emotion_service import EmotionReading, EmotionService, extract_memory_vads
+from brain.response_policy import ResponsePolicy, derive_response_policy
 from core.container import ServiceContainer
 from core.logging import bind_turn_id, log_duration
 from schemas.chat import (
@@ -31,6 +32,9 @@ router = APIRouter(prefix="/v1/chat", tags=["chat"])
 
 class ChatRequest(BaseModel):
     query: str
+    # Produced by the client-side audio/text VAD fusion when available.
+    # Omitting it preserves the existing chat behaviour exactly.
+    user_vad: VADScores | None = None
 
 
 class ChatResponse(BaseModel):
@@ -41,6 +45,23 @@ class ChatResponse(BaseModel):
     # Current system emotional state: response V/A/D blended with retrieved memories' V/A/D
     emotion: str
     state: VADScores
+    response_policy: "ResponsePolicyResponse | None" = None
+
+
+class ResponsePolicyResponse(BaseModel):
+    instruction: str
+    max_tokens: int | None
+    temperature: float | None
+    stream_pace: str
+
+    @classmethod
+    def from_policy(cls, policy: ResponsePolicy) -> "ResponsePolicyResponse":
+        return cls(
+            instruction=policy.instruction,
+            max_tokens=policy.max_tokens,
+            temperature=policy.temperature,
+            stream_pace=policy.stream_pace,
+        )
 
 
 class SeedResponse(BaseModel):
@@ -74,14 +95,19 @@ async def chat(body: ChatRequest, container: ServiceContainer = Depends(get_cont
     turn_id = str(uuid.uuid4())
     with bind_turn_id(turn_id):
         async with container.llm_gate.foreground():
+            policy = derive_response_policy(body.user_vad, container.llm.max_tokens)
             turn = await prepare_turn(
                 body.query, container.memory, container.rag, container.memory_recent_limit,
                 history_char_budget=container.memory_recent_char_budget,
                 facts_char_budget=container.memory_facts_char_budget,
                 on_rag_error=_log_rag_error("chat"),
+                response_policy=policy,
             )
             with log_duration(logger, "llm.chat", component="llm"):
-                response_text = await container.llm.chat(turn.messages)
+                response_text = await container.llm.chat(
+                    turn.messages,
+                    options=policy.options(container.llm.temperature, container.llm.max_tokens),
+                )
 
         reading, state = await _emotion_state(container.emotion, response_text, turn.retrieved_docs)
 
@@ -104,6 +130,7 @@ async def chat(body: ChatRequest, container: ServiceContainer = Depends(get_cont
         docs_count=len(turn.retrieved_docs),
         emotion=state.emotion,
         state=VADScores(valence=state.valence, arousal=state.arousal, dominance=state.dominance),
+        response_policy=ResponsePolicyResponse.from_policy(policy) if policy.is_active else None,
     )
 
 
@@ -129,16 +156,21 @@ async def chat_stream(body: ChatRequest, container: ServiceContainer = Depends(g
                 # enough that a background generation slipping in during it would
                 # still land in front of this turn's first token.
                 async with container.llm_gate.foreground():
+                    policy = derive_response_policy(body.user_vad, container.llm.max_tokens)
                     turn = await prepare_turn(
                         body.query, container.memory, container.rag, container.memory_recent_limit,
                         history_char_budget=container.memory_recent_char_budget,
                         facts_char_budget=container.memory_facts_char_budget,
                         on_rag_error=_log_rag_error("chat_stream"),
+                        response_policy=policy,
                     )
                     docs = turn.retrieved_docs
 
                     stream_start_logged = False
-                    async for chunk in container.llm.stream_chat(turn.messages):
+                    async for chunk in container.llm.stream_chat(
+                        turn.messages,
+                        options=policy.options(container.llm.temperature, container.llm.max_tokens),
+                    ):
                         if not stream_start_logged:
                             logger.debug("llm.stream_chat | first token received", extra={"component": "llm"})
                             stream_start_logged = True

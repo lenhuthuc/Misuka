@@ -28,6 +28,10 @@ const live2dForceAutoBlinkEnabled = useVersionedLocalStorageManualReset<boolean>
   },
 })
 const live2dExpressionEnabled = useLocalStorageManualReset<boolean>('settings/live2d/expression-enabled', false)
+/** Drive face + posture parameters continuously from the brain's V/A/D output. */
+const live2dEmotionVadEnabled = useLocalStorageManualReset<boolean>('settings/live2d/emotion-vad-enabled', true)
+/** Scales every emotion-driven parameter offset. 0 = neutral pose, 1 = as authored. */
+const live2dEmotionVadIntensity = useLocalStorageManualReset<number>('settings/live2d/emotion-vad-intensity', 1)
 const live2dShadowEnabled = useLocalStorageManualReset<boolean>('settings/live2d/shadow-enabled', true)
 const live2dMaxFps = useLocalStorageManualReset<number>('settings/live2d/max-fps', 0)
 const live2dRenderScale = useLocalStorageManualReset<number>('settings/live2d/render-scale', 2)
@@ -40,6 +44,8 @@ function resetState() {
   live2dAutoBlinkEnabled.reset()
   live2dForceAutoBlinkEnabled.reset()
   live2dExpressionEnabled.reset()
+  live2dEmotionVadEnabled.reset()
+  live2dEmotionVadIntensity.reset()
   live2dShadowEnabled.reset()
   live2dMaxFps.reset()
   live2dRenderScale.reset()
@@ -54,6 +60,8 @@ export const useSettingsLive2d = defineStore('settings-live2d', () => {
     live2dAutoBlinkEnabled,
     live2dForceAutoBlinkEnabled,
     live2dExpressionEnabled,
+    live2dEmotionVadEnabled,
+    live2dEmotionVadIntensity,
     live2dShadowEnabled,
     live2dMaxFps,
     live2dRenderScale,

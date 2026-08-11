@@ -472,28 +472,45 @@ export function useMotionUpdatePluginLipSync(
 
   let releaseRemainingMs = 0
   let lastForcedValue = 0
+  // What this plugin last wrote to ParamMouthOpenY. Used to tell "someone else
+  // owns the mouth this frame" from "we are reading back our own output".
+  let lastWrittenValue: number | undefined
 
   // Smoothstep: 3t^2 - 2t^3, eases in/out with zero slope at endpoints.
   const smoothstep = (t: number) => t * t * (3 - 2 * t)
+
+  function write(ctx: MotionManagerPluginContext, value: number) {
+    ctx.model.setParameterValueById('ParamMouthOpenY', value)
+    lastWrittenValue = value
+  }
 
   return (ctx) => {
     if (nowSpeaking.value) {
       lastForcedValue = mouthOpenSize.value
       releaseRemainingMs = RELEASE_DURATION_MS
-      ctx.model.setParameterValueById('ParamMouthOpenY', mouthOpenSize.value)
+      write(ctx, mouthOpenSize.value)
       return
     }
 
-    if (releaseRemainingMs <= 0)
+    if (releaseRemainingMs <= 0) {
+      lastWrittenValue = undefined
       return
+    }
 
     releaseRemainingMs = Math.max(0, releaseRemainingMs - ctx.timeDelta * 1000)
     const blend = smoothstep(1 - releaseRemainingMs / RELEASE_DURATION_MS)
 
-    // ParamMouthOpenY was already written by motion + expression plugins this frame.
-    const motionValue = ctx.model.getParameterValueById('ParamMouthOpenY') as number
-    const blended = lastForcedValue * (1 - blend) + motionValue * blend
+    // ParamMouthOpenY may already have been written by the motion / expression /
+    // emotion plugins this frame, and that value is where the mouth belongs at
+    // rest. But a model with no motion curves (and no emotion driver) leaves the
+    // parameter holding *our* previous release frame — blending toward that is a
+    // feedback loop that converges on the last spoken opening, so the mouth never
+    // closes. Fall back to the model's resting mouth in that case.
+    const current = ctx.model.getParameterValueById('ParamMouthOpenY') as number
+    const restValue = lastWrittenValue !== undefined && current === lastWrittenValue
+      ? (ctx.modelParameters.value?.mouthOpen ?? 0)
+      : current
 
-    ctx.model.setParameterValueById('ParamMouthOpenY', blended)
+    write(ctx, lastForcedValue * (1 - blend) + restValue * blend)
   }
 }

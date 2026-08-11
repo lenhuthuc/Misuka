@@ -217,7 +217,10 @@ def _parse_facts(raw: str, corpus: set[str] | None = None) -> list[tuple[str, st
         if not _is_usable_fact(key, value):
             continue
         if corpus is not None and not _is_grounded(value, corpus):
-            logger.info("MemoryCurator | dropped ungrounded fact %r: %r", key, value)
+            # Per-fact rejections are prompt-tuning diagnostics, not events —
+            # a batch that drops four hallucinated facts is the filter working,
+            # and printing four lines for it buries the one line that matters.
+            logger.debug("MemoryCurator | dropped ungrounded fact %r: %r", key, value)
             continue
         facts.append((key, value))
     return facts

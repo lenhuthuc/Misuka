@@ -57,10 +57,9 @@ def test_a_single_oversized_message_is_still_kept():
     assert history[0]["content"] == "z" * 9000
 
 
-def test_emotion_is_read_from_the_untrimmed_window():
-    """@example: the only emotion-bearing message is old enough to be trimmed
-    from the prompt -> the agent's carried-over mood still reaches the system
-    prompt, because trimming is a latency measure and not a memory reset."""
+def test_stored_assistant_emotion_is_not_reinjected_as_a_fixed_prompt():
+    """@example: emotion labels remain output metadata, not a stale instruction
+    that can override the current user's emotional state on later turns."""
     recent = [
         msg("assistant", "d" * 100, emotion="joy"),
         msg("user", "e" * 3000),
@@ -69,7 +68,7 @@ def test_emotion_is_read_from_the_untrimmed_window():
 
     messages = build_messages("q", "ctx", recent, history_char_budget=3000)
 
-    assert "joy" in messages[0]["content"]
+    assert "joy" not in messages[0]["content"]
     assert len(messages[1:-1]) < len(recent)
 
 

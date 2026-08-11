@@ -80,24 +80,24 @@ def test_facts_are_independent_of_the_history_budget():
 
 
 def test_facts_precede_the_blocks_that_churn():
-    """@example: facts, emotion and context in one system prompt -> facts come
+    """@example: facts, policy and context in one system prompt -> facts come
     first, because prompt-prefix caching re-prefills everything after the first
     block that changed.
 
-    Measured: the same facts block after the emotion line cost 1.879s of prefill
+    Measured: the same facts block after the changing policy block costs more
     per turn, before it 0.859s. Reordering is the entire saving — the token
     count is identical."""
     recent = [{
-        "role": "assistant", "content": "hi",
-        "emotion": "joy", "timestamp": "2026-08-09T00:00:00+00:00",
+        "role": "assistant", "content": "hi", "timestamp": "2026-08-09T00:00:00+00:00",
     }]
 
     system = system_of(build_messages(
         "q", "retrieved text", recent, facts=[fact("goal", "fluency")],
+        response_policy_instruction="Response style: brief.",
     ))
 
-    assert system.index("goal: fluency") < system.index("emotional state")
-    assert system.index("emotional state") < system.index("retrieved text")
+    assert system.index("goal: fluency") < system.index("Response style: brief.")
+    assert system.index("Response style: brief.") < system.index("retrieved text")
 
 
 def test_facts_and_retrieved_context_both_appear():

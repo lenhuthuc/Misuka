@@ -39,6 +39,7 @@ class ServiceContainer:
     audio_emotion: AudioEmotionService
     whisper: WhisperService
     tts: TTSService
+    tts_default_voice: str
     llm: "LLMService"
     memory: "MemoryService"
     vector: "VectorService"
@@ -70,7 +71,7 @@ class ServiceContainer:
             settings.whisper_model, settings.whisper_device, settings.whisper_compute,
             settings.whisper_models_dir,
         )
-        tts = TTSService(settings.piper_models_dir)
+        tts = TTSService(settings.piper_models_dir, settings.kokoro_models_dir)
 
         embedder = EmbeddingModel(settings.embedding_model_name, settings.embedding_batch_size)
         llm = LLMService(
@@ -99,7 +100,7 @@ class ServiceContainer:
         )
         emotion = EmotionService(vad)
 
-        llm_gate = LLMPriorityGate()
+        llm_gate = LLMPriorityGate(quiet_seconds=settings.llm_quiet_seconds)
         # Its own client even when the model matches the chat one: extraction
         # wants deterministic output, not the chat temperature or token ceiling.
         curator_llm = LLMService(
@@ -125,6 +126,7 @@ class ServiceContainer:
             audio_emotion=audio_emotion,
             whisper=whisper,
             tts=tts,
+            tts_default_voice=settings.tts_default_voice,
             llm=llm,
             memory=memory,
             vector=vector,

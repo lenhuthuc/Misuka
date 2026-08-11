@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from brain.memory_service import MemoryService
     from brain.rag_service import RAGService
     from brain.state import RetrievedDoc
+    from brain.response_policy import ResponsePolicy
 
 
 @dataclass
@@ -44,6 +45,7 @@ async def prepare_turn(
     on_rag_error: Callable[[Exception], None] | None = None,
     history_char_budget: int = 3000,
     facts_char_budget: int = 600,
+    response_policy: "ResponsePolicy | None" = None,
 ) -> TurnContext:
     """Run the RAG-decision + retrieval + message-building steps shared by
     every chat turn.
@@ -77,6 +79,7 @@ async def prepare_turn(
     facts = await memory.list_facts()
     messages = build_messages(
         query, context, recent, history_char_budget, facts, facts_char_budget,
+        response_policy_instruction=response_policy.instruction if response_policy else "",
     )
 
     # Prefill cost is linear in prompt size and dominates time-to-first-token on

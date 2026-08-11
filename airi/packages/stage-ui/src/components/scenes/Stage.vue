@@ -92,7 +92,7 @@ const {
   spineMaxFps,
   spineRenderScale,
 } = storeToRefs(settingsStore)
-const { mouthOpenSize, nowSpeaking } = storeToRefs(useSpeakingStore())
+const { mouthOpenSize, mouthOpenSource, nowSpeaking } = storeToRefs(useSpeakingStore())
 const { audioContext } = useAudioContext()
 const currentAudioSource = ref<AudioBufferSourceNode>()
 const { latestStopRequest } = storeToRefs(useSpeechOutputControlStore())
@@ -168,6 +168,7 @@ if (isStageTamagotchi() && activeTranscriptionProvider.value === 'browser-web-sp
   activeTranscriptionProvider.value = ''
 }
 const emotionStore = useEmotionStore()
+const { emotion: emotionVad } = storeToRefs(emotionStore)
 const activeCardId = computed(() => activeCard.value?.name ?? 'default')
 const speechRuntimeStore = useSpeechRuntimeStore()
 const backgroundStore = useBackgroundStore()
@@ -606,11 +607,16 @@ function startLipSyncLoop() {
     return
 
   const tick = () => {
-    if (!nowSpeaking.value || !live2dLipSync.value) {
-      mouthOpenSize.value = 0
-    }
-    else {
-      mouthOpenSize.value = live2dLipSync.value.getMouthOpen()
+    // Once started this loop never stops, so it has to stand down while
+    // local-conversation playback owns the mouth — otherwise it would zero out
+    // that pipeline's values every frame (its own analyser hears nothing).
+    if (mouthOpenSource.value === 'pipeline') {
+      if (!nowSpeaking.value || !live2dLipSync.value) {
+        mouthOpenSize.value = 0
+      }
+      else {
+        mouthOpenSize.value = live2dLipSync.value.getMouthOpen()
+      }
     }
     lipSyncLoopId.value = requestAnimationFrame(tick)
   }
@@ -881,6 +887,9 @@ watch(latestStopRequest, (request) => {
 chatHookCleanups.push(onBeforeMessageComposed(async () => {
   playbackManager.stopAll('new-message')
 
+  // This hook only fires for the cloud chat flow, so it is the point where the
+  // speech pipeline takes the mouth back from local-conversation playback.
+  mouthOpenSource.value = 'pipeline'
   setupAnalyser()
   await setupLipSync()
   resetAssistantSpeechSurface('new-message')
@@ -1192,6 +1201,7 @@ defineExpose({
         :cursor-position="cursorPosition"
         :mouth-open-size="mouthOpenSize"
         :now-speaking="nowSpeaking"
+        :emotion-vad="emotionVad"
         :paused="paused"
         :theme-colors-hue="themeColorsHue"
         :theme-colors-hue-dynamic="themeColorsHueDynamic"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Live2DEyeFocusSource } from '../../composables/live2d'
+import type { EmotionVAD, Live2DEyeFocusSource } from '../../composables/live2d'
 
 import { Screen } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
@@ -12,6 +12,7 @@ import { useLive2DEyeFocusFor, useSettingsLive2d } from '../../composables/live2
 
 import '../../utils/live2d-zip-loader'
 import '../../utils/live2d-opfs-registration'
+import '../../utils/live2d-core-compat'
 
 const props = withDefaults(defineProps<{
   cursorPosition?: Live2DEyeFocusSource
@@ -21,6 +22,8 @@ const props = withDefaults(defineProps<{
   paused?: boolean
   mouthOpenSize?: number
   nowSpeaking?: boolean
+  /** Latest V/A/D from the brain — drives face + posture parameters every frame. */
+  emotionVad?: EmotionVAD
   themeColorsHue?: number
   themeColorsHueDynamic?: boolean
 }>(), {
@@ -111,6 +114,7 @@ defineExpose({
         :app="app"
         :mouth-open-size="mouthOpenSize"
         :now-speaking="nowSpeaking"
+        :emotion-vad="emotionVad"
         :width="width"
         :height="height"
         :paused="paused"

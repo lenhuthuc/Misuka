@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Application } from '@pixi/app'
 
-import type { PixiLive2DInternalModel } from '../../../composables/live2d'
+import type { EmotionVAD, PixiLive2DInternalModel } from '../../../composables/live2d'
 
 import { listenBeatSyncBeatSignal } from '@proj-airi/stage-shared/beat-sync'
 import { useTheme } from '@proj-airi/ui'
@@ -16,16 +16,20 @@ import { computed, onMounted, onUnmounted, ref, shallowRef, toRef, watch } from 
 
 import {
   createBeatSyncController,
+  createLive2DEmotionDriver,
   useExpressionController,
   useLive2DMotionManagerUpdate,
   useMotionUpdatePluginAutoEyeBlink,
   useMotionUpdatePluginBeatSync,
+  useMotionUpdatePluginEmotionVAD,
   useMotionUpdatePluginExpression,
   useMotionUpdatePluginIdleDisable,
   useMotionUpdatePluginIdleFocus,
   useMotionUpdatePluginLipSync,
+  useSettingsLive2d,
 } from '../../../composables/live2d'
 import { useFitModel } from '../../../composables/live2d/fit-model'
+import { applyLive2DCoreCompat } from '../../../utils/live2d-core-compat'
 import { Emotion, EmotionNeutralMotionName } from '../../../constants/emotions'
 import { useL2dViewControl, useLive2dParams } from '../../../stores'
 
@@ -36,6 +40,8 @@ const props = withDefaults(defineProps<{
   app?: Application
   mouthOpenSize?: number
   nowSpeaking?: boolean
+  /** Latest V/A/D from the brain — drives face + posture parameters every frame. */
+  emotionVad?: EmotionVAD
   width: number
   height: number
   paused?: boolean
@@ -186,11 +192,22 @@ const savedEyeBlink = shallowRef<any>(null)
 const savedExpressionManager = shallowRef<any>(null)
 
 const localCurrentMotion = ref<{ group: string, index: number }>({ group: 'Idle', index: 0 })
+
+const { live2dEmotionVadEnabled, live2dEmotionVadIntensity } = storeToRefs(useSettingsLive2d())
+const emotionDriver = createLive2DEmotionDriver({
+  source: () => props.emotionVad,
+  enabled: () => live2dEmotionVadEnabled.value,
+  intensity: () => live2dEmotionVadIntensity.value,
+})
+
 const beatSync = createBeatSyncController({
+  // The emotion head pose rides on the beat-sync *base* rather than being written
+  // to ParamAngle* directly — the spring rewrites those every frame and would
+  // otherwise cancel the pose out. See `Live2DEmotionDriver.headAngle`.
   baseAngles: () => ({
-    x: modelParameters.value.angleX,
-    y: modelParameters.value.angleY,
-    z: modelParameters.value.angleZ,
+    x: modelParameters.value.angleX + emotionDriver.headAngle.x.value,
+    y: modelParameters.value.angleY + emotionDriver.headAngle.y.value,
+    z: modelParameters.value.angleZ + emotionDriver.headAngle.z.value,
   }),
   initialStyle: 'sway-sine',
 })
@@ -249,6 +266,10 @@ async function loadModel() {
       componentState.value = 'mounted'
       return
     }
+
+    // Idempotent, and re-asserted here because module import order does not
+    // guarantee the compat shim ran while the Cubism Core global existed.
+    applyLive2DCoreCompat()
 
     const live2DModel = new Live2DModel<PixiLive2DInternalModel>()
     await Live2DFactory.setupLive2DModel(live2DModel, { url: modelSrcRef.value, id: props.modelId }, { autoInteract: false })
@@ -353,12 +374,18 @@ async function loadModel() {
     motionManagerUpdate.register(useMotionUpdatePluginBeatSync(beatSync), 'pre')
     motionManagerUpdate.register(useMotionUpdatePluginIdleDisable(), 'pre')
     motionManagerUpdate.register(useMotionUpdatePluginIdleFocus(), 'post')
-    // Both run in 'final' stage (ignores handled state).
-    // Expression first: sets desired parameter values (e.g. closed eyes = 0).
-    // Blink second: reads post-expression eye values, Multiply-modulates on top.
-    // This ensures blink respects expression state (0 × blinkFactor = 0).
+    // All run in 'final' stage (ignores handled state), and the order is the
+    // layering order:
+    // 1. Expression: sets desired parameter values (e.g. closed eyes = 0).
+    // 2. Blink: reads post-expression eye values, Multiply-modulates on top,
+    //    so blink respects expression state (0 × blinkFactor = 0).
+    // 3. Emotion: scales the blinked eyes and writes the V/A/D face + posture,
+    //    including the resting ParamMouthOpenY.
+    // 4. Lip sync: owns the mouth while speech is active, then releases to the
+    //    resting value the emotion plugin just wrote.
     motionManagerUpdate.register(useMotionUpdatePluginExpression(expressionController), 'final')
     motionManagerUpdate.register(useMotionUpdatePluginAutoEyeBlink(live2dExpressionEnabled), 'final')
+    motionManagerUpdate.register(useMotionUpdatePluginEmotionVAD(emotionDriver), 'final')
     motionManagerUpdate.register(useMotionUpdatePluginLipSync(mouthOpenSize, nowSpeaking), 'final')
 
     const hookedUpdate = motionManager.update as (model: PixiLive2DInternalModel['coreModel'], now: number) => boolean
@@ -394,7 +421,10 @@ async function loadModel() {
     coreModel.setParameterValueById('ParamAngleZ', modelParameters.value.angleZ)
     coreModel.setParameterValueById('ParamEyeLOpen', modelParameters.value.leftEyeOpen)
     coreModel.setParameterValueById('ParamEyeROpen', modelParameters.value.rightEyeOpen)
-    coreModel.setParameterValueById('ParamEyeSmile', modelParameters.value.leftEyeSmile)
+    // Cubism rigs expose the smile as a per-eye pair; 'ParamEyeSmile' is not a
+    // standard id and silently no-ops on models that follow the convention.
+    coreModel.setParameterValueById('ParamEyeLSmile', modelParameters.value.leftEyeSmile)
+    coreModel.setParameterValueById('ParamEyeRSmile', modelParameters.value.rightEyeSmile)
     coreModel.setParameterValueById('ParamBrowLX', modelParameters.value.leftEyebrowLR)
     coreModel.setParameterValueById('ParamBrowRX', modelParameters.value.rightEyebrowLR)
     coreModel.setParameterValueById('ParamBrowLY', modelParameters.value.leftEyebrowY)

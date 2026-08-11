@@ -73,11 +73,22 @@ export const useAudioContext = defineStore('audio-context', () => {
   }
 })
 
+/**
+ * Which pipeline owns `mouthOpenSize`.
+ *
+ * The cloud speech pipeline installs a permanent rAF loop that writes the
+ * parameter every frame (zeroing it whenever its own analyser is silent), so a
+ * second producer — local-conversation playback, which taps its own analyser —
+ * has to claim the mouth or be overwritten 60 times a second.
+ */
+export type MouthOpenSource = 'pipeline' | 'local-conversation'
+
 export const useSpeakingStore = defineStore('character-speaking', () => {
   const nowSpeakingAvatarBorderOpacityMin = 30
   const nowSpeakingAvatarBorderOpacityMax = 100
   const mouthOpenSize = ref(0)
   const nowSpeaking = ref(false)
+  const mouthOpenSource = ref<MouthOpenSource>('pipeline')
 
   const nowSpeakingAvatarBorderOpacity = computed<number>(() => {
     if (!nowSpeaking.value)
@@ -89,6 +100,7 @@ export const useSpeakingStore = defineStore('character-speaking', () => {
 
   return {
     mouthOpenSize,
+    mouthOpenSource,
     nowSpeaking,
     nowSpeakingAvatarBorderOpacity,
   }

@@ -1,6 +1,8 @@
 import { errorMessageFrom } from '@moeru/std'
+import { storeToRefs } from 'pinia'
 import { ref } from 'vue'
 
+import { useAudioContext, useSpeakingStore } from '../stores/audio'
 import { describeHttpFailure, extractSentences, MIN_SENTENCE_LEN, parseChatStreamLine } from './local-conversation-sse'
 import { createTtsPlaybackQueue } from './local-conversation-tts-queue'
 
@@ -40,7 +42,17 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
   const reply = ref('')
   const error = ref<string>()
 
-  const ttsQueue = createTtsPlaybackQueue(baseUrl)
+  // Local mode does not go through the cloud speech pipeline, so nothing else
+  // populates the speaking store — without this the avatar stays mute-faced
+  // while Piper audio plays.
+  const { audioContext } = useAudioContext()
+  const { mouthOpenSize, mouthOpenSource, nowSpeaking } = storeToRefs(useSpeakingStore())
+
+  const ttsQueue = createTtsPlaybackQueue(baseUrl, {
+    audioContext: () => audioContext,
+    onSpeakingChange: (speaking) => { nowSpeaking.value = speaking },
+    onMouthOpen: (value) => { mouthOpenSize.value = value },
+  })
 
   // Per-turn abort controller — cancelled on barge-in or new turn start
   let _abort: AbortController | null = null
@@ -54,6 +66,11 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
   function _stopAll() {
     _abort?.abort()
     _abort = null
+    // Aborting an in-flight sentence already closes the mouth through the
+    // queue's abort handler; this covers the case where the fetch was cancelled
+    // before playback ever started.
+    nowSpeaking.value = false
+    mouthOpenSize.value = 0
   }
 
   /** Call when VAD detects speech start — interrupts any in-progress TTS (barge-in). */
@@ -71,6 +88,7 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
       return
 
     _stopAll()
+    mouthOpenSource.value = 'local-conversation'
     const myGeneration = ++_generation
     const abort = new AbortController()
     _abort = abort
@@ -187,10 +205,12 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
           }
 
           if (event.type === 'emotion') {
-            // Chat-turn emotion state isn't wired to the avatar yet — only the
-            // /emotion-vad user-turn analysis drives `onEmotion` today. Ignoring
-            // (rather than blindly reading `.content`) is what stops this event
-            // from corrupting `response` with a literal "undefined".
+            // The brain's own emotional state for this reply — it supersedes the
+            // user-turn /emotion-vad reading above, so the avatar mirrors the
+            // speaker while listening and then acts out its own answer.
+            // `continue` (rather than falling through to `.content`) is what
+            // stops this event from appending a literal "undefined" to `response`.
+            onEmotion?.({ v: event.state.valence, a: event.state.arousal, d: event.state.dominance })
             continue
           }
 

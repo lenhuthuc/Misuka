@@ -1,7 +1,7 @@
 import process, { cwd, env } from 'node:process'
 
-import { readFile } from 'node:fs/promises'
 import { execSync } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 import VueI18n from '@intlify/unplugin-vue-i18n/vite'
@@ -18,8 +18,8 @@ import VueMacros from 'vue-macros/vite'
 import VueRouter from 'vue-router/vite'
 
 import { tryCatch } from '@moeru/std'
+import { DownloadCubismCore } from '@proj-airi/stage-ui-live2d/vite/download-cubism-core'
 import { Download } from '@proj-airi/unplugin-fetch/vite'
-import { DownloadLive2DSDK } from '@proj-airi/unplugin-live2d-sdk/vite'
 import { LFS, SpaceCard } from 'hfup/vite'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -118,7 +118,7 @@ export default defineConfig({
           // Strip query string before using as file path
           const urlPath = req.url.split('?')[0]
           const raw = decodeURIComponent(urlPath.replace(/^\/@fs\//, ''))
-          const filePath = raw.match(/^[A-Za-z]:/) ? raw : `/${raw}`
+          const filePath = /^[A-Z]:/i.test(raw) ? raw : `/${raw}`
           // eslint-disable-next-line no-console
           console.log('[serve-zip] Intercepted:', filePath)
           readFile(filePath).then((buffer) => {
@@ -251,9 +251,7 @@ export default defineConfig({
     // https://github.com/webfansplz/vite-plugin-vue-devtools
     VueDevTools(),
 
-    DownloadLive2DSDK(),
-    Download('https://dist.ayaka.moe/live2d-models/hiyori_free_zh.zip', 'hiyori_free_zh.zip', 'live2d/models', { parentDir: stageUIAssetsRoot, cacheDir: sharedCacheDir }),
-    Download('https://dist.ayaka.moe/live2d-models/hiyori_pro_zh.zip', 'hiyori_pro_zh.zip', 'live2d/models', { parentDir: stageUIAssetsRoot, cacheDir: sharedCacheDir }),
+    DownloadCubismCore({ cacheDir: sharedCacheDir }),
     Download('https://dist.ayaka.moe/vrm-models/VRoid-Hub/AvatarSample-A/AvatarSample_A.vrm', 'AvatarSample_A.vrm', 'vrm/models/AvatarSample-A', { parentDir: stageUIAssetsRoot, cacheDir: sharedCacheDir }),
     Download('https://dist.ayaka.moe/vrm-models/VRoid-Hub/AvatarSample-B/AvatarSample_B.vrm', 'AvatarSample_B.vrm', 'vrm/models/AvatarSample-B', { parentDir: stageUIAssetsRoot, cacheDir: sharedCacheDir }),
 

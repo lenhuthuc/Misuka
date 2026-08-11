@@ -8,7 +8,9 @@ no sys.modules faking or real network/model access is needed.
 """
 from __future__ import annotations
 
+import io
 import sys
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -56,30 +58,25 @@ class FakeWhisperService:
         return "fake transcript"
 
 
-class _FakeVoice:
-    def synthesize_wav(self, text: str, wf) -> None:
-        # Large enough to span several of the API's 4096-byte stream chunks,
-        # so interruption tests can observe a stream stopping mid-flight.
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(16000)
-        wf.writeframes(b"\x00\x00" * 20000)
-
-
 class FakeTTSService:
     _VOICE_ID = "fake-voice"
 
     def list_voices(self) -> list[dict]:
-        return [{"id": self._VOICE_ID, "name": self._VOICE_ID}]
+        return [{"id": self._VOICE_ID, "name": self._VOICE_ID, "engine": "fake"}]
 
     def has_voice(self, voice_id: str) -> bool:
         return voice_id == self._VOICE_ID
 
-    def get_voice(self, voice_id: str) -> _FakeVoice:
-        return _FakeVoice()
-
-    def get_sample_rate(self, voice_id: str) -> int:
-        return 16000
+    def synthesize_wav(self, voice_id: str, text: str) -> bytes:
+        # Large enough to span several of the API's 4096-byte stream chunks,
+        # so interruption tests can observe a stream stopping mid-flight.
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(b"\x00\x00" * 20000)
+        return buf.getvalue()
 
 
 class FakeLLMService:
@@ -90,16 +87,22 @@ class FakeLLMService:
         stream_error: Exception | None = None,
         generate_reply: str = "NO",
     ) -> None:
+        self.temperature = 0.7
+        self.max_tokens = 1024
         self.response_text = response_text
         self.stream_chunks = stream_chunks if stream_chunks is not None else ["Xin ", "chao", "!"]
         self.stream_error = stream_error
         self.generate_reply = generate_reply
         self.generate_calls: list[str] = []
+        self.chat_calls: list[tuple[list[dict], dict | None]] = []
+        self.stream_chat_calls: list[tuple[list[dict], dict | None]] = []
 
-    async def chat(self, messages) -> str:
+    async def chat(self, messages, options=None) -> str:
+        self.chat_calls.append((messages, options))
         return self.response_text
 
-    async def stream_chat(self, messages):
+    async def stream_chat(self, messages, options=None):
+        self.stream_chat_calls.append((messages, options))
         if self.stream_error is not None:
             raise self.stream_error
         for chunk in self.stream_chunks:
@@ -206,12 +209,16 @@ class FakeBrainBundle:
         self.audio_emotion = FakeAudioEmotionService()
         self.whisper = FakeWhisperService()
         self.tts = FakeTTSService()
+        self.tts_default_voice = FakeTTSService._VOICE_ID
         self.llm = FakeLLMService()
         self.memory = FakeMemoryService()
         self.vector = FakeVectorService()
         self.rag = FakeRAGService()
         self.curator_llm = FakeLLMService()
-        self.llm_gate = LLMPriorityGate(settle_seconds=0.0)
+        # No settle or quiet window: the suite asserts on routing, not on the
+        # gate's timing, and a real quiet window would add 20s to every test
+        # that touches a chat endpoint.
+        self.llm_gate = LLMPriorityGate(settle_seconds=0.0, quiet_seconds=0.0)
         # Constructed but never started: routes only ever call `notify()` on it,
         # and a running drain loop would race every assertion in the suite.
         self.curator = MemoryCurator(
@@ -224,6 +231,7 @@ class FakeBrainBundle:
             audio_emotion=self.audio_emotion,
             whisper=self.whisper,
             tts=self.tts,
+            tts_default_voice=self.tts_default_voice,
             llm=self.llm,
             memory=self.memory,
             vector=self.vector,

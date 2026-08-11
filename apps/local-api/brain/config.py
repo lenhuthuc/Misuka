@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     # answers that pushed prompts past 11k characters after five turns.
     llm_max_tokens: int = Field(default=320)
 
+    # ── LLM priority gate ────────────────────────────────────────────────────
+    # How long the conversation must stay quiet before background LLM work may
+    # touch the runner. Measured from the end of reply playback (the gate is
+    # told each synthesised clip's duration), so this only has to cover the
+    # pause between hearing an answer and starting the next question. The cost
+    # of setting it too low is not just a queued request: a background prompt
+    # displaces the chat model's cached prefix in Ollama, so even work that
+    # gets cancelled the moment the user speaks still bills ~1s of re-prefill
+    # to the turn it interrupted.
+    llm_quiet_seconds: float = Field(default=20.0)
+
     # ── Memory curator (background fact extraction) ──────────────────────────
     # Not the smallest model available, deliberately. Measured on fact-rich
     # input, qwen2.5:0.5b answered "None" even when the prompt asked for facts
@@ -40,7 +51,9 @@ class Settings(BaseSettings):
     # dominant cost; too large a batch is a longer uninterruptible window.
     curator_batch_size: int = Field(default=5)
     # How long a batch waits for a quiet runner before giving up this round.
-    curator_idle_timeout: float = Field(default=30.0)
+    # Must stay comfortably above `llm_quiet_seconds` or no round can ever
+    # outlast the quiet window and the queue only drains between sessions.
+    curator_idle_timeout: float = Field(default=45.0)
     # Back-off after a round found no quiet moment. The queue is durable, so
     # waiting costs recall lag rather than lost memories.
     curator_retry_seconds: float = Field(default=20.0)
@@ -102,6 +115,15 @@ class Settings(BaseSettings):
     # parents[3] from this file (brain/config.py) is
     # apps/local-api/brain -> apps/local-api -> apps -> <repo root>.
     piper_models_dir: Path = Field(default=Path(__file__).resolve().parents[3] / "assets" / "models" / "voices")
+
+    # ── Kokoro (text-to-speech) ────────────────────────────────────────────────
+    # Heavier than Piper but far more expressive. Measured on this CPU: RTF 0.34
+    # against Piper's 0.057, so still several times faster than real time.
+    # Piper stays installed because Kokoro has no Vietnamese voices.
+    kokoro_models_dir: Path = Field(default=Path(__file__).resolve().parents[3] / "assets" / "models" / "kokoro")
+    # Voice used when a request asks for "default". Without this the app's voice
+    # was whichever one the registry happened to list first.
+    tts_default_voice: str = Field(default="af_nicole")
 
     # ── CORS ─────────────────────────────────────────────────────────────────
     cors_allow_origins: list[str] = Field(default=["*"])

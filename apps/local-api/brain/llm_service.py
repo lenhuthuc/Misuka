@@ -36,24 +36,24 @@ class LLMService:
         resp.raise_for_status()
         return resp.json()["response"]
 
-    async def chat(self, messages: list[dict[str, str]]) -> str:
+    async def chat(self, messages: list[dict[str, str]], options: dict | None = None) -> str:
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {"temperature": self.temperature, "num_predict": self.max_tokens},
+            "options": options or {"temperature": self.temperature, "num_predict": self.max_tokens},
         }
         logger.debug("LLM chat | model=%s turns=%d", self.model, len(messages))
         resp = await self._client.post(_CHAT_PATH, json=payload)
         resp.raise_for_status()
         return resp.json()["message"]["content"]
 
-    async def stream_chat(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
+    async def stream_chat(self, messages: list[dict[str, str]], options: dict | None = None) -> AsyncIterator[str]:
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": True,
-            "options": {"temperature": self.temperature, "num_predict": self.max_tokens},
+            "options": options or {"temperature": self.temperature, "num_predict": self.max_tokens},
         }
         async with self._client.stream("POST", _CHAT_PATH, json=payload) as resp:
             resp.raise_for_status()

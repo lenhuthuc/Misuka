@@ -69,3 +69,14 @@ async def test_chat_stream_no_response_skips_emotion_event(client, fake_brain_bu
     events = _parse_sse(resp.text)
 
     assert [e for e in events if e["type"] == "emotion"] == []  # empty full_response -> skipped entirely
+
+
+async def test_chat_stream_vad_uses_fast_short_generation_policy(client, fake_brain_bundle):
+    resp = await client.post("/v1/chat/stream", json={
+        "query": "toi dang roi", "user_vad": {"valence": -0.7, "arousal": 0.9, "dominance": -0.6},
+    })
+
+    assert resp.status_code == 200
+    messages, options = fake_brain_bundle.llm.stream_chat_calls[-1]
+    assert options == {"temperature": 0.55, "num_predict": 256}
+    assert "Response style: brief" in messages[0]["content"]

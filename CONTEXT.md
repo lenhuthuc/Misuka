@@ -15,7 +15,8 @@ Mitsuka/
 ├─ ModelPreVoice/           # Whisper model weights & tokenizer
 ├─ assets/
 │  └─ models/
-│     └─ voices/            # Piper TTS voices (*.onnx + *.onnx.json), tracked in git
+│     ├─ voices/            # Piper TTS voices (*.onnx + *.onnx.json), tracked in git
+│     └─ models/            # Live2D Cubism 4 source model (TiredGirl_V1.*) — see "Avatar"
 ├─ tools/
 │  └─ legacy/               # whisper_server.py, test_transcribe.py — not the production entry point
 ├─ apps/
@@ -52,8 +53,26 @@ Mitsuka/
    `ChatResponse`, or an `emotion` SSE event before `done`).
 5. Background (client does not wait, tracked by `ServiceContainer.tasks` — a `BackgroundTaskRegistry`
    that logs failures and drains on shutdown): save turn to SQLite with V/A/D + emotion, index the
-   exchange into Qdrant with V/A/D payload, LLM decides whether to extract long-term facts —
-   [apps/local-api/brain/background.py](apps/local-api/brain/background.py)
+   exchange into Qdrant with V/A/D payload, enqueue the exchange for fact extraction —
+   [apps/local-api/brain/background.py](apps/local-api/brain/background.py). Nothing here calls the
+   LLM; see "Background LLM work" below for why.
+
+## Background LLM work
+Ollama serves one request at a time per model and decode is memory-bandwidth-bound here, so any
+background generation either delays the next turn or halves total throughput. Two pieces enforce
+"the user's turn owns the runner":
+- **`core/llm_priority.py`'s `LLMPriorityGate`** — chat endpoints wrap their turn in
+  `foreground()`; background callers go through `run_when_idle()`, which abandons work the moment
+  the conversation stirs. Crucially the gate tracks the *conversation*, not just the generation:
+  the `foreground()` block exits at the last generated token, while the reply is still unspoken.
+  So `/emotion-vad` reports `mark_active()` (the user is talking now) and `/v1/audio/speech`
+  reports `hold_active(<clip duration>)` (that much reply is about to play), and background work
+  additionally waits `llm_quiet_seconds` past all of it. Getting this wrong is not just a queued
+  request — a background prompt evicts the chat model's cached prefix in Ollama, so work that is
+  cancelled the instant the user speaks still bills ~1s of re-prefill to the turn it interrupted.
+- **`brain/curator.py`'s `MemoryCurator`** — a single long-lived worker draining a durable SQLite
+  queue, batching several exchanges per LLM call. Its `curator_idle_timeout` must stay above
+  `llm_quiet_seconds` or no round can outlast the quiet window.
 
 ### `/v1/chat/stream` SSE envelope
 Every event is `{"type": "delta"|"emotion"|"error"|"done", "turn_id": "...", ...}` — see
@@ -75,6 +94,41 @@ event after an error. The frontend parser lives at
 - `/emotion-vad` additionally fuses audio (wav2vec2) and text V/A/D at 0.7/0.3, and accepts a
   `language` form field forwarded to Whisper.
 - **Backfill**: `python scripts/backfill_vad.py` fills V/A/D + emotion for old assistant rows.
+
+## Avatar (Live2D)
+- **Model**: `TiredGirl_V1`, shipped as the single preset `preset-live2d-1` from
+  `airi/packages/stage-ui/src/assets/live2d/preset/tiredgirl.zip` (committed — unlike
+  `assets/live2d/models/*`, which upstream gitignores and downloads at build time). Rebuild it
+  from `assets/models/models/` with
+  `node airi/packages/stage-ui-live2d/scripts/pack-live2d-preset.mjs`.
+- The model ships **no motions and no expressions**, so the emotion-motion map
+  (`constants/emotions.ts`) has nothing to play — every expression is parameter-driven instead.
+- **Cubism Core version is load-bearing**: the Core caps which `moc3` file version it accepts, and
+  a too-new model fails only as `CubismMoc.create` throwing `Error: Unknown error`.
+  Core 5.0.0 (SDK 5-r.3, what upstream's `DownloadLive2DSDK` pins) tops out at moc3 v5;
+  `TiredGirl_V1.moc3` is v6 (Cubism Editor 5.1) and needs Core 6.0.1 (SDK 5-r.5). That's why the
+  apps use `airi/packages/stage-ui-live2d/vite/download-cubism-core.mjs` instead — bump
+  `CUBISM_SDK_VERSION` there *and* the `<script src>` in each app's `index.html` together.
+- Core 6 is one API break ahead of the Cubism **4** framework bundled in
+  `pixi-live2d-display@0.4.0`: `renderOrders` moved from `model.drawables` to the model root, and
+  the framework's read of the old location blows up on the first rendered frame
+  (`doDrawModel` → `Cannot read properties of undefined (reading '0')`).
+  `src/utils/live2d-core-compat.ts` re-exposes it; everything else the framework touches is
+  unchanged in Core 6. Delete that shim when pixi-live2d-display ships a Cubism 5 framework.
+- **V/A/D → parameters**: `airi/packages/stage-ui-live2d/src/composables/live2d/emotion-vad.ts`.
+  V/A/D is first combined into affect terms (`joy`, `anger`, `sorrow`, `energy`) — the same
+  negative valence reads as anger when dominant and sadness when submissive, and those want
+  opposite brows — then written to brows/eyes/mouth-form/cheek/posture every frame.
+  `useEmotionStore().emotion` reaches it as the `emotionVad` prop:
+  `Stage.vue` → `Live2D.vue` → `live2d/Model.vue`. Toggle/scale via
+  `settings/live2d/emotion-vad-{enabled,intensity}`.
+- **Frame plugin order** (all `final`, in `Model.vue`): expression → auto-blink → emotion →
+  lip sync. Emotion scales the eyes *multiplicatively* so a blink still closes them, and writes
+  the resting `ParamMouthOpenY` that lip sync releases to.
+- **Mouth open/close**: `mouthOpenSize`/`nowSpeaking` on `useSpeakingStore`. Local mode plays
+  Piper audio through the Web Audio graph (`local-conversation-tts-queue.ts`) and taps an
+  `AnalyserNode` for the opening; the mouth closes over a 200 ms release once a sentence ends.
+  `mouthOpenSource` arbitrates between that and the cloud speech pipeline's rAF loop.
 
 ## RAG pipeline
 - Embeddings: `paraphrase-multilingual-MiniLM-L12-v2` (384-dim, CPU).
@@ -143,4 +197,7 @@ Schema migrations are additive `ALTER TABLE`s applied in `MemoryService.initiali
 | [apps/local-api/schemas/chat.py](apps/local-api/schemas/chat.py) | The `/v1/chat/stream` SSE envelope (versioned, discriminated by `type`) |
 | [apps/local-api/brain/emotion_mapper.py](apps/local-api/brain/emotion_mapper.py) | The V/A/D → emotion taxonomy (edit here to tune labels) |
 | [apps/local-api/brain/config.py](apps/local-api/brain/config.py) | All tunables (Ollama model, Qdrant, model paths, logging, CORS) |
+| [apps/local-api/core/llm_priority.py](apps/local-api/core/llm_priority.py) | Keeps background LLM work off the runner for the whole user turn, playback included |
 | [apps/local-api/tests/conftest.py](apps/local-api/tests/conftest.py) | Fake service fixtures — read this before adding a new test |
+| [airi/packages/stage-ui-live2d/src/composables/live2d/emotion-vad.ts](airi/packages/stage-ui-live2d/src/composables/live2d/emotion-vad.ts) | V/A/D → Live2D parameter mapping (edit here to tune the avatar's acting) |
+| [airi/packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts](airi/packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts) | Per-frame plugin pipeline: blink, emotion, lip sync |

@@ -6,6 +6,7 @@ import { ref } from 'vue'
 import {
   useMotionUpdatePluginAutoEyeBlink,
   useMotionUpdatePluginIdleDisable,
+  useMotionUpdatePluginLipSync,
 } from './motion-manager'
 
 vi.mock('./animation', () => ({
@@ -178,5 +179,64 @@ describe('live2d motion manager plugins', () => {
     expect(context.model.getParameterValueById('ParamEyeROpen')).toBe(1)
 
     randomSpy.mockRestore()
+  })
+
+  /**
+   * @example
+   * expect(context.model.getParameterValueById('ParamMouthOpenY')).toBe(0)
+   */
+  it('closes the mouth after speech ends on a model with no motion curves', () => {
+    // ROOT CAUSE:
+    //
+    // The release blended toward whatever ParamMouthOpenY held, which on a model
+    // with no motion (and no expression) curves is the plugin's own output from
+    // the previous frame. That feedback loop converges on the last spoken
+    // opening, so the avatar finished a sentence with its mouth hanging open.
+    const mouthOpenSize = ref(0.8)
+    const nowSpeaking = ref(true)
+    const plugin = useMotionUpdatePluginLipSync(mouthOpenSize, nowSpeaking)
+    const context = createContext({
+      model: createModel({ ParamMouthOpenY: 0 }) as unknown as MotionManagerPluginContext['model'],
+      modelParameters: ref({ leftEyeOpen: 1, rightEyeOpen: 1, mouthOpen: 0 }),
+      timeDelta: 0.05,
+    })
+
+    plugin(context)
+    expect(context.model.getParameterValueById('ParamMouthOpenY')).toBe(0.8)
+
+    nowSpeaking.value = false
+    // 4 × 50ms covers the 200ms release.
+    for (let i = 0; i < 4; i++)
+      plugin(context)
+
+    expect(context.model.getParameterValueById('ParamMouthOpenY')).toBe(0)
+  })
+
+  /**
+   * @example
+   * expect(context.model.getParameterValueById('ParamMouthOpenY')).toBeCloseTo(0.3)
+   */
+  it('releases to the rest value another plugin wrote this frame', () => {
+    const mouthOpenSize = ref(0.8)
+    const nowSpeaking = ref(true)
+    const plugin = useMotionUpdatePluginLipSync(mouthOpenSize, nowSpeaking)
+    const context = createContext({
+      model: createModel({ ParamMouthOpenY: 0 }) as unknown as MotionManagerPluginContext['model'],
+      modelParameters: ref({ leftEyeOpen: 1, rightEyeOpen: 1, mouthOpen: 0 }),
+      timeDelta: 0.05,
+    })
+
+    plugin(context)
+    nowSpeaking.value = false
+
+    for (let i = 0; i < 4; i++) {
+      // Stands in for the emotion / motion plugins, which run first and own the
+      // resting mouth — the lip sync release must land on their value, not on
+      // the model parameter fallback.
+      context.model.setParameterValueById('ParamMouthOpenY', 0.3)
+      plugin(context)
+    }
+
+    expect(context.model.getParameterValueById('ParamMouthOpenY')).toBeCloseTo(0.3)
   })
 })

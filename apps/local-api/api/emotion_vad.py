@@ -62,6 +62,12 @@ async def emotion_vad(
     language: str | None = Form("en"),
     container: ServiceContainer = Depends(get_container),
 ) -> EmotionVADResponse:
+    # This request *is* the user talking, and it arrives before the chat turn
+    # it will produce. Telling the gate now abandons any background generation
+    # while Whisper still has work to do, so the runner is free by the time the
+    # turn asks for it — waiting for /v1/chat to open the gate is a step late.
+    container.llm_gate.mark_active()
+
     raw = await audio_file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty audio file.")
