@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from schemas.vad import VADScores
+from schemas.vad import AgentVAD, VADScores
 
 
 class ChatStreamDeltaEvent(BaseModel):
@@ -40,6 +40,10 @@ class ChatStreamErrorEvent(BaseModel):
 class ChatStreamDoneEvent(BaseModel):
     type: Literal["done"] = "done"
     turn_id: str
+    # Text-only V/A/D for the complete response, sent once generation has
+    # finished (never computed per-token). None when there was no response to
+    # analyze (e.g. the LLM stream failed before producing any text).
+    agent_vad: AgentVAD | None = None
 
 
 ChatStreamEvent = ChatStreamDeltaEvent | ChatStreamEmotionEvent | ChatStreamErrorEvent | ChatStreamDoneEvent

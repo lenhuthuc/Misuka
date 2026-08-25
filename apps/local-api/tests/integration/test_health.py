@@ -33,9 +33,10 @@ async def test_app_startup_wires_container(client, fake_brain_bundle):
     assert container.memory is fake_brain_bundle.memory
     assert container.vector is fake_brain_bundle.vector
     assert container.rag is fake_brain_bundle.rag
-    assert container.vad is fake_brain_bundle.vad
-    assert container.audio_emotion is fake_brain_bundle.audio_emotion
-    assert container.whisper is fake_brain_bundle.whisper
+    assert container.text_vad is fake_brain_bundle.text_vad
+    assert container.multimodal_vad is fake_brain_bundle.multimodal_vad
+    assert container.asr is fake_brain_bundle.asr
+    assert container.emotion_pipeline is fake_brain_bundle.emotion_pipeline
     assert container.tts is fake_brain_bundle.tts
 
 

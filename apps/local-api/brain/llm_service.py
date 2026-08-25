@@ -11,6 +11,16 @@ logger = logging.getLogger(__name__)
 _GENERATE_PATH = "/api/generate"
 _CHAT_PATH = "/api/chat"
 
+# Reasoning models (Qwen3 and up) emit a thinking pass before the answer, and
+# Ollama bills it against `num_predict` like any other token. Measured on
+# qwen3:4b with a 320-token ceiling, three of four spoken turns spent the whole
+# budget reasoning in English and never reached a Vietnamese reply. Nothing here
+# wants a visible reasoning trace — the output is read aloud — so it is off for
+# every call. Ollama ignores the flag on models without the `thinking`
+# capability (verified against qwen2.5: HTTP 200, no error), which keeps this
+# safe to send unconditionally rather than gating it on the configured model.
+_THINK = False
+
 
 class LLMService:
     """Thin async wrapper around the Ollama REST API."""
@@ -28,6 +38,7 @@ class LLMService:
             "prompt": prompt,
             "stream": False,
             "options": {"temperature": self.temperature, "num_predict": self.max_tokens},
+            "think": _THINK,
         }
         if system:
             payload["system"] = system
@@ -42,6 +53,7 @@ class LLMService:
             "messages": messages,
             "stream": False,
             "options": options or {"temperature": self.temperature, "num_predict": self.max_tokens},
+            "think": _THINK,
         }
         logger.debug("LLM chat | model=%s turns=%d", self.model, len(messages))
         resp = await self._client.post(_CHAT_PATH, json=payload)
@@ -54,6 +66,7 @@ class LLMService:
             "messages": messages,
             "stream": True,
             "options": options or {"temperature": self.temperature, "num_predict": self.max_tokens},
+            "think": _THINK,
         }
         async with self._client.stream("POST", _CHAT_PATH, json=payload) as resp:
             resp.raise_for_status()

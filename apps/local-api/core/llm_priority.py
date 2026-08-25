@@ -1,77 +1,72 @@
-"""Owns the "background LLM work must never overlap a user-facing turn"
-invariant.
+"""Answers one question for background work: "has the user heard the reply yet?"
 
-Ollama serves one request at a time per model, so a background
-`llm.generate()` queued ahead of the next chat turn delays that turn's *first*
-token by the background call's full duration. Measured on this project's CPU
-setup (qwen2.5:3b, DDR4-3200): time-to-first-token was 16-19s while the
-previous turn's memory tasks were still queued, versus 3.3s once the queue had
-drained.
+Embedding a finished exchange is CPU-heavy but never touches the LLM runner,
+so the thing it must stay out of the way of is *synthesis*, not generation.
+Waiting for the generation to finish is the wrong gate and actively harmful:
+it opens the moment the last token is produced, which is precisely when Piper
+starts rendering the reply, so the embedding and the synthesis then fight over
+the same cores and the user waits longer to hear anything. Measured on this
+project's CPU, the exchange embedding ran for ~3s starting the same second the
+client asked for speech.
 
-Serving them concurrently is not an alternative. Decode here is
-memory-bandwidth-bound, so two concurrent generations do not share the machine
-gracefully -- measured aggregate throughput *dropped* to 0.46x of a single
-request. The only way to protect the foreground turn is to keep background
-work strictly off the wire while a turn is in flight.
+So the gate tracks the conversation rather than the generation. Call sites feed
+it what the server already knows: `/emotion-vad` means the user is speaking now
+(`mark_active`), a `/v1/audio/speech` response means that many seconds of reply
+are about to be played (`hold_active`), and `/v1/audio/speech/finished` means
+the client's playback queue drained (`speech_finished`).
 
-Why "a turn is in flight" is wider than the LLM call:
-
-Holding the gate only for `llm.chat`/`stream_chat` was not enough. That block
-exits the moment the last token is generated -- while the reply is still being
-spoken and the user has not yet answered it. Background work therefore started
-in *exactly* the gap before the next turn, every turn. Cancelling it when the
-turn finally arrived did not undo the damage either: the background prompt had
-already displaced the chat model's cached prefix in Ollama, costing roughly a
-second of re-prefill on the turn it was supposed to protect.
-
-So the gate tracks the conversation, not just the generation. Call sites feed
-it what the server already knows: `/emotion-vad` means the user is speaking
-now (`mark_active`), and a `/v1/audio/speech` response means that many seconds
-of reply are about to be played (`hold_active`). Background work waits for
-`quiet_seconds` past all of it.
+This module used to carry a second, wider invariant -- background *LLM* calls
+must never overlap a user-facing turn -- for the memory curator, which mined
+finished exchanges for durable facts on the same Ollama runner the chat turn
+needs. That component is gone, and with it `run_when_idle`, the quiet-window
+machinery it waited on, and the interrupt channel that abandoned its work when
+a turn arrived. Nothing on the server issues background LLM calls any more; if
+something ever does, that gate has to come back with it.
 """
 from __future__ import annotations
 
 import asyncio
-import logging
-from collections.abc import Callable, Coroutine
-from typing import Any
-
-logger = logging.getLogger(__name__)
 
 
 class LLMPriorityGate:
-    """Keeps background LLM calls out of the way of user-facing turns.
+    """Keeps heavy background work out of the way of reply synthesis.
 
     Use when: a request path serves a user who is waiting (chat, streaming
-    chat) and some other path issues LLM calls that nobody is waiting for
-    (fact extraction, summarisation).
+    chat) and some other path does CPU-heavy work nobody is waiting for
+    (embedding a finished exchange).
 
-    Expects: every user-facing turn is wrapped in `foreground()`, every other
-    sign of an ongoing conversation is reported through `mark_active()` /
-    `hold_active()`, and every background LLM call site awaits
-    `wait_until_idle()` first. Background callers should re-await it between
-    successive calls rather than assuming the gate stayed open.
+    Expects: every user-facing turn is wrapped in `foreground()`, and every
+    other sign of an ongoing conversation is reported through `mark_active()` /
+    `hold_active()` / `speech_finished()`.
 
     Returns: `foreground()` is an async context manager holding the gate open
-    for its body; `wait_until_idle()` resolves once no turn is in flight, the
-    conversation has been quiet for `quiet_seconds`, and a short settle window
-    has passed with the gate still clear.
+    for its body; `wait_until_spoken()` resolves as soon as the reply has
+    finished playing.
     """
 
-    def __init__(self, settle_seconds: float = 0.25, quiet_seconds: float = 20.0) -> None:
+    def __init__(self, speech_lull_seconds: float = 6.0) -> None:
         # Nested/overlapping foreground turns are possible (a second client
         # request arriving mid-stream), so track a depth rather than a bool.
         self._active = 0
         self._idle = asyncio.Event()
         self._idle.set()
-        self._busy = asyncio.Event()
-        self._settle_seconds = settle_seconds
-        self._quiet_seconds = quiet_seconds
+        self._speech_lull_seconds = speech_lull_seconds
         # Loop-clock timestamps. 0.0 reads as "long ago", which is what a
         # freshly started process should mean: nothing to stay out of the way of.
-        self._last_active = 0.0
         self._playback_until = 0.0
+        # "The reply to what the user just said has not finished being spoken."
+        # Set the moment the user's voice arrives, cleared when the client says
+        # its playback queue drained. Starts set (nothing is owed at boot).
+        self._spoken = asyncio.Event()
+        self._spoken.set()
+        # Whether any audio has been synthesised since the flag was raised. Until
+        # one clip exists, `_playback_until` is a stale reservation from an older
+        # turn and says nothing about this one.
+        self._playback_held = False
+        # When the most recent clip was handed over. A reply is spoken a
+        # sentence at a time, so the reservation running dry means "the client
+        # has not asked for the next clip *yet*", not "there is no next clip".
+        self._last_hold = 0.0
 
     def foreground(self) -> "_ForegroundTurn":
         return _ForegroundTurn(self)
@@ -83,10 +78,16 @@ class LLMPriorityGate:
         Also drops any outstanding playback hold: getting here means the user
         talked over the reply, so the audio the hold was reserving time for is
         no longer playing.
+
+        This is also where the "a reply is owed and unspoken" flag is raised.
+        Every new utterance re-arms it, including one that interrupts a reply
+        still being spoken -- that reply is now dead, and the one being waited
+        for is the one this utterance will produce.
         """
-        self._last_active = self._now()
         self._playback_until = 0.0
-        self._interrupt()
+        self._playback_held = False
+        self._last_hold = 0.0
+        self._spoken.clear()
 
     def hold_active(self, seconds: float) -> None:
         """Reserve conversation time that has not elapsed yet -- reply audio
@@ -99,77 +100,69 @@ class LLMPriorityGate:
         """
         if seconds <= 0:
             return
-        self._playback_until = max(self._playback_until, self._now()) + seconds
-        self._interrupt()
+        now = self._now()
+        self._playback_until = max(self._playback_until, now) + seconds
+        self._playback_held = True
+        self._last_hold = now
+
+    def speech_finished(self) -> None:
+        """The client's playback queue has drained -- the reply has been heard.
+
+        This is the signal `wait_until_spoken()` exists for. The reservations
+        `hold_active` accumulates are only an estimate of the same moment
+        (they assume playback starts the instant synthesis returns), so the
+        estimate is collapsed to now rather than left running past the audio.
+        """
+        self._playback_until = min(self._playback_until, self._now())
+        self._last_hold = 0.0
+        self._spoken.set()
 
     @staticmethod
     def _now() -> float:
         return asyncio.get_running_loop().time()
 
-    def _quiet_at(self) -> float:
-        """The earliest moment background work may start, ignoring `_idle`."""
-        return max(self._last_active, self._playback_until) + self._quiet_seconds
+    def _reservation_ends_at(self) -> float:
+        """The earliest moment the *unsignalled* end of a reply may be assumed.
 
-    def _interrupt(self) -> None:
-        """Abandon in-flight background work without latching the gate shut.
+        A reply is synthesised one sentence at a time, so `_playback_until`
+        covers only the clips that have been asked for so far. Treating it as
+        the end of the reply is wrong in the one case that matters: the client
+        is mid-reply and its next clip is still rendering, which is precisely
+        when the reservation runs dry. Measured on a two-sentence reply, the
+        exchange embedding started 2s after the first clip and 4s before the
+        second one arrived -- so it competed with the render it was waiting to
+        avoid, and made the gap between the two sentences it was sitting in
+        longer still.
 
-        `Event.set()` resolves every current waiter's future synchronously, so
-        the immediate `clear()` only affects later `wait()` calls -- the pulse
-        still reaches whoever was waiting. Clearing is skipped while a
-        foreground turn owns `_busy` through `_enter`/`_exit`.
+        Hence the second term: a lull with no new clip is what says the client
+        has stopped, and the reservation only expires once both have. The
+        explicit `speech_finished()` signal short-circuits all of it, so this
+        only ever delays a client that went away, which `timeout` already
+        covers.
         """
-        self._busy.set()
-        if self._active == 0:
-            self._busy.clear()
+        return max(self._playback_until, self._last_hold + self._speech_lull_seconds)
 
-    async def run_when_idle(
-        self,
-        work: "Callable[[], Coroutine[Any, Any, Any]]",
-        timeout: float | None = None,
-    ) -> bool:
-        """Run background LLM work in the gap between turns, abandoning it the
-        moment a turn arrives.
+    async def wait_until_spoken(self, timeout: float | None = None) -> bool:
+        """Block until the reply to the user's last utterance has been spoken.
 
-        Waiting for idle is not enough on its own: a user pausing to read looks
-        exactly like a user who has gone away, so background work legitimately
-        starts during the pause and then holds the queue when they type again.
-        Cancelling the coroutine drops the HTTP request, which is what makes
-        Ollama stop generating rather than finish into a queue nobody is
-        reading.
+        Use when: background work is CPU-heavy but does *not* touch the LLM
+        runner -- embedding a finished exchange, say. Waiting on the
+        generation instead is the wrong gate for that work: it opens when the
+        last token is produced, which is precisely when Piper starts rendering
+        the reply, so the embedding and the synthesis then fight over the same
+        cores and the user waits longer to hear anything. Measured on this
+        project's CPU: the exchange embedding ran for ~3s starting at the same
+        second the client asked for speech.
 
-        Expects: `work` builds a *fresh* coroutine each call, since a cancelled
-        one cannot be retried.
+        Expects: `mark_active()` on every user utterance (that raises the flag)
+        and `speech_finished()` from the client when its playback queue drains.
+        A client that goes away mid-reply never sends the latter, so the
+        reservations from `hold_active()` are the backstop, and `timeout` is
+        the backstop behind that.
 
-        Returns: True if the work ran to completion, False if it never got a
-        quiet moment or was abandoned partway.
-        """
-        if not await self.wait_until_idle(timeout):
-            return False
-
-        task = asyncio.ensure_future(work())
-        interrupted = asyncio.ensure_future(self._busy.wait())
-        try:
-            await asyncio.wait({task, interrupted}, return_when=asyncio.FIRST_COMPLETED)
-
-            if task.done():
-                await task  # surface any exception to the caller's handler
-                return True
-
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            logger.info("background LLM work abandoned: a turn started")
-            return False
-        finally:
-            interrupted.cancel()
-
-    async def wait_until_idle(self, timeout: float | None = None) -> bool:
-        """Block until no foreground turn is in flight *and* the conversation
-        has been quiet for `quiet_seconds`.
-
-        Re-checks after the settle window because a turn that starts during
-        the wait would otherwise race past the gate. Returns False if
-        `timeout` elapsed first, so callers can decide whether to skip their
-        work rather than pile onto a busy queue.
+        Returns: True once the reply has been spoken and no foreground turn is
+        in flight; False if `timeout` elapsed first. Callers holding durable
+        work should still run it on False -- late is better than dropped.
         """
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout
@@ -184,35 +177,39 @@ class LLMPriorityGate:
             except asyncio.TimeoutError:
                 return False
 
-            # An open gate is not the same as a finished conversation: it opens
-            # the instant the last token is generated, with the reply still
-            # unspoken and the user's answer still to come.
-            quiet_in = self._quiet_at() - loop.time()
-            if quiet_in > 0:
-                remaining = None if deadline is None else deadline - loop.time()
-                if remaining is not None and remaining <= 0:
-                    return False
-                await asyncio.sleep(quiet_in if remaining is None else min(quiet_in, remaining))
-                continue
-
-            await asyncio.sleep(self._settle_seconds)
-            if self._idle.is_set() and self._quiet_at() <= loop.time():
+            if self._spoken.is_set():
                 return True
+
+            # No signal yet. Fall back on the reservations -- but only once
+            # the client has also stopped asking for clips; see
+            # `_reservation_ends_at`.
+            if self._playback_held and self._reservation_ends_at() <= loop.time():
+                return True
+
+            remaining = None if deadline is None else deadline - loop.time()
+            if remaining is not None and remaining <= 0:
+                return False
+            # Re-check when the reservation runs out, or as soon as the client
+            # reports the queue drained -- whichever happens first.
+            # Nothing synthesised yet: there is no reservation to time out on,
+            # so poll slowly and let `_spoken.wait()` do the real waking.
+            reserved = self._reservation_ends_at() - loop.time() if self._playback_held else 1.0
+            wake_in = max(reserved, 0.05)
+            if remaining is not None:
+                wake_in = min(wake_in, remaining)
+            try:
+                await asyncio.wait_for(self._spoken.wait(), timeout=wake_in)
+            except asyncio.TimeoutError:
+                continue
 
     def _enter(self) -> None:
         self._active += 1
         self._idle.clear()
-        self._busy.set()
 
     def _exit(self) -> None:
         self._active = max(0, self._active - 1)
         if self._active == 0:
-            # The quiet window is measured from here, not from whenever the
-            # background worker next looks: a finished generation is the start
-            # of playback, not the end of the turn.
-            self._last_active = self._now()
             self._idle.set()
-            self._busy.clear()
 
 
 class _ForegroundTurn:

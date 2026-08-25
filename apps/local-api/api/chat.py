@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Callable
@@ -23,7 +24,7 @@ from schemas.chat import (
     ChatStreamErrorDetail,
     ChatStreamErrorEvent,
 )
-from schemas.vad import VADScores
+from schemas.vad import AgentVAD, VADScores
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ class ChatResponse(BaseModel):
     # Current system emotional state: response V/A/D blended with retrieved memories' V/A/D
     emotion: str
     state: VADScores
+    # Text-only V/A/D for `response`, in [0, 1] — see schemas/vad.py:AgentVAD.
+    agent_vad: AgentVAD
     response_policy: "ResponsePolicyResponse | None" = None
 
 
@@ -82,6 +85,13 @@ async def _emotion_state(
     return reading, state
 
 
+async def _agent_vad(container: ServiceContainer, response: str) -> AgentVAD:
+    """Text-only V/A/D for the agent's complete response — never touches user
+    audio, the user transcript, user_vad, or WavLM embeddings."""
+    v, a, d = await asyncio.to_thread(container.emotion_pipeline.analyze_agent_response, response)
+    return AgentVAD(valence=v, arousal=a, dominance=d)
+
+
 def _log_rag_error(operation: str) -> Callable[[Exception], None]:
     def _handler(exc: Exception) -> None:
         # Non-fatal (the turn degrades to no-context) but still an unexpected
@@ -99,7 +109,6 @@ async def chat(body: ChatRequest, container: ServiceContainer = Depends(get_cont
             turn = await prepare_turn(
                 body.query, container.memory, container.rag, container.memory_recent_limit,
                 history_char_budget=container.memory_recent_char_budget,
-                facts_char_budget=container.memory_facts_char_budget,
                 on_rag_error=_log_rag_error("chat"),
                 response_policy=policy,
             )
@@ -110,15 +119,18 @@ async def chat(body: ChatRequest, container: ServiceContainer = Depends(get_cont
                 )
 
         reading, state = await _emotion_state(container.emotion, response_text, turn.retrieved_docs)
+        agent_vad = await _agent_vad(container, response_text)
 
-        # Save conversation history and optionally extract long-term facts in
-        # the background — client receives the response without waiting for
-        # these. Spawned while turn_id is still bound, so the background
-        # task's own log lines (see core/tasks.py) inherit it too.
+        # Save and index the exchange in the background — the client receives
+        # the response without waiting for either. Spawned while turn_id is still bound, so the background
+        # task's own log lines (see core/tasks.py) inherit it too. The gate is
+        # what keeps the exchange's embedding from running while the reply is
+        # still being synthesised and spoken.
         container.tasks.spawn(
             run_memory_tasks(
                 body.query, response_text, container.memory,
-                emotion=reading, vector=container.vector, curator=container.curator,
+                emotion=reading, vector=container.vector,
+                gate=container.llm_gate, defer_timeout=container.index_defer_timeout,
             ),
             name="chat.memory_tasks",
         )
@@ -130,6 +142,7 @@ async def chat(body: ChatRequest, container: ServiceContainer = Depends(get_cont
         docs_count=len(turn.retrieved_docs),
         emotion=state.emotion,
         state=VADScores(valence=state.valence, arousal=state.arousal, dominance=state.dominance),
+        agent_vad=agent_vad,
         response_policy=ResponsePolicyResponse.from_policy(policy) if policy.is_active else None,
     )
 
@@ -160,8 +173,7 @@ async def chat_stream(body: ChatRequest, container: ServiceContainer = Depends(g
                     turn = await prepare_turn(
                         body.query, container.memory, container.rag, container.memory_recent_limit,
                         history_char_budget=container.memory_recent_char_budget,
-                        facts_char_budget=container.memory_facts_char_budget,
-                        on_rag_error=_log_rag_error("chat_stream"),
+                                on_rag_error=_log_rag_error("chat_stream"),
                         response_policy=policy,
                     )
                     docs = turn.retrieved_docs
@@ -187,6 +199,7 @@ async def chat_stream(body: ChatRequest, container: ServiceContainer = Depends(g
                 yield f"data: {error_event.model_dump_json()}\n\n"
 
             reading = None
+            agent_vad = None
             if full_response:
                 try:
                     reading, state = await _emotion_state(
@@ -201,13 +214,19 @@ async def chat_stream(body: ChatRequest, container: ServiceContainer = Depends(g
                 except Exception:
                     logger.exception("chat_stream | emotion inference failed")
 
-            yield f"data: {ChatStreamDoneEvent(turn_id=turn_id).model_dump_json()}\n\n"
+                try:
+                    agent_vad = await _agent_vad(container, full_response)
+                except Exception:
+                    logger.exception("chat_stream | agent_vad inference failed")
+
+            yield f"data: {ChatStreamDoneEvent(turn_id=turn_id, agent_vad=agent_vad).model_dump_json()}\n\n"
 
             if full_response:
                 container.tasks.spawn(
                     run_memory_tasks(
                         body.query, full_response, container.memory,
-                        emotion=reading, vector=container.vector, curator=container.curator,
+                        emotion=reading, vector=container.vector,
+                        gate=container.llm_gate, defer_timeout=container.index_defer_timeout,
                     ),
                     name="chat_stream.memory_tasks",
                 )

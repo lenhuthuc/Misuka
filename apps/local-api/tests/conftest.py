@@ -22,39 +22,52 @@ if str(VAD_ROOT) not in sys.path:
     sys.path.insert(0, str(VAD_ROOT))
 
 import main  # noqa: E402
-from brain.curator import MemoryCurator  # noqa: E402
 from brain.emotion_service import EmotionService  # noqa: E402
 from core.container import ServiceContainer  # noqa: E402
 from core.llm_priority import LLMPriorityGate  # noqa: E402
 from core.tasks import BackgroundTaskRegistry  # noqa: E402
-from core.tts_coordinator import TTSInterruptCoordinator  # noqa: E402
+from service.emotion_pipeline import EmotionPipeline  # noqa: E402
 
 
-class FakeVADService:
+class FakeTextVADService:
+    """Stands in for `service.text_vad_service.TextVADService`."""
+
     def __init__(self) -> None:
         self.calls: list[str] = []
 
     def predict(self, text: str) -> tuple[float, float, float]:
+        """Signed [-1, 1] — what `EmotionService`/`/vad` expect."""
         self.calls.append(text)
         return (0.0, 0.0, 0.0)
 
+    def predict_signed(self, text: str) -> tuple[float, float, float]:
+        return self.predict(text)
 
-class FakeAudioEmotionService:
-    def predict(self, audio, sample_rate: int = 16000) -> tuple[float, float, float]:
-        return (0.1, 0.1, 0.1)
+    def predict_raw(self, text: str) -> tuple[float, float, float]:
+        """[0, 1] — the checkpoint's native range, used for `agent_vad`."""
+        self.calls.append(text)
+        return (0.5, 0.5, 0.5)
 
 
-class FakeWhisperService:
+class FakeMultimodalVADService:
+    """Stands in for `service.multimodal_vad_service.MultimodalVADService`."""
+
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str | None]] = []  # (audio_path, language)
+        self.calls: list[tuple[int, int, str]] = []  # (len(audio), len(mask), text)
 
-    def transcribe(
-        self,
-        audio_path: str,
-        language: str | None = "en",
-        prompt: str | None = None,
-    ) -> str:
-        self.calls.append((audio_path, language))
+    def predict(self, audio, audio_attention_mask, text: str) -> tuple[float, float, float]:
+        self.calls.append((len(audio), len(audio_attention_mask), text))
+        return (0.6, 0.6, 0.6)
+
+
+class FakeASRService:
+    """Stands in for `service.sherpa_asr_service.SherpaASRService`."""
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []  # len(samples) per call
+
+    def transcribe(self, samples) -> str:
+        self.calls.append(len(samples))
         return "fake transcript"
 
 
@@ -67,9 +80,11 @@ class FakeTTSService:
     def has_voice(self, voice_id: str) -> bool:
         return voice_id == self._VOICE_ID
 
-    def synthesize_wav(self, voice_id: str, text: str) -> bytes:
-        # Large enough to span several of the API's 4096-byte stream chunks,
-        # so interruption tests can observe a stream stopping mid-flight.
+    def synthesize_wav(self, voice_id: str, text: str, plan: object | None = None) -> bytes:
+        # Recorded rather than used: the route decides *whether* a prosody plan
+        # exists at all (V/A/D present, `speed` overridden), and that decision
+        # is what the tests assert on.
+        self.last_plan = plan
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(1)
@@ -119,9 +134,6 @@ class FakeLLMService:
 class FakeMemoryService:
     def __init__(self) -> None:
         self.messages: list[dict] = []
-        self.facts: dict[str, str] = {}
-        self.curation_queue: list[dict] = []
-        self._next_curation_id = 1
 
     async def get_recent(self, limit: int) -> list[dict]:
         return self.messages[-limit:]
@@ -133,38 +145,6 @@ class FakeMemoryService:
             "role": role, "content": content, "vad": vad, "emotion": emotion,
             "timestamp": f"2026-08-09T00:00:{len(self.messages):02d}+00:00",
         })
-
-    async def upsert_fact(self, key: str, value: str) -> None:
-        self.facts[key] = value
-
-    async def list_facts(self) -> list[dict]:
-        return [{"key": k, "value": v} for k, v in self.facts.items()]
-
-    async def enqueue_curation(self, query: str, response: str, emotion=None, vad=None) -> int:
-        row_id = self._next_curation_id
-        self._next_curation_id += 1
-        v, a, d = vad if vad else (None, None, None)
-        self.curation_queue.append({
-            "id": row_id, "query": query, "response": response, "emotion": emotion,
-            "valence": v, "arousal": a, "dominance": d,
-            "created_at": "2026-08-09T00:00:00+00:00", "attempts": 0,
-        })
-        return row_id
-
-    async def next_curation_batch(self, limit: int, max_attempts: int = 3) -> list[dict]:
-        eligible = [r for r in self.curation_queue if r["attempts"] < max_attempts]
-        return eligible[:limit]
-
-    async def complete_curation(self, ids: list[int]) -> None:
-        self.curation_queue = [r for r in self.curation_queue if r["id"] not in ids]
-
-    async def record_curation_failure(self, ids: list[int]) -> None:
-        for row in self.curation_queue:
-            if row["id"] in ids:
-                row["attempts"] += 1
-
-    async def pending_curation_count(self, max_attempts: int = 3) -> int:
-        return len([r for r in self.curation_queue if r["attempts"] < max_attempts])
 
     async def close(self) -> None:
         pass
@@ -205,49 +185,45 @@ class FakeBrainBundle:
     """
 
     def __init__(self) -> None:
-        self.vad = FakeVADService()
-        self.audio_emotion = FakeAudioEmotionService()
-        self.whisper = FakeWhisperService()
+        self.text_vad = FakeTextVADService()
+        self.multimodal_vad = FakeMultimodalVADService()
+        self.asr = FakeASRService()
+        # Real orchestrator over the fakes above — exercises the actual
+        # decode/resample/center-crop pipeline (service/audio_preprocessing.py)
+        # against real WAV bytes, only the two models + ASR are faked.
+        self.emotion_pipeline = EmotionPipeline(self.asr, self.multimodal_vad, self.text_vad)
         self.tts = FakeTTSService()
         self.tts_default_voice = FakeTTSService._VOICE_ID
+        self.tts_prosody_depth = 1.0
+        self.tts_pitch_scale = 1.06
+        self.tts_contour_depth = 0.0
         self.llm = FakeLLMService()
         self.memory = FakeMemoryService()
         self.vector = FakeVectorService()
         self.rag = FakeRAGService()
-        self.curator_llm = FakeLLMService()
-        # No settle or quiet window: the suite asserts on routing, not on the
-        # gate's timing, and a real quiet window would add 20s to every test
-        # that touches a chat endpoint.
-        self.llm_gate = LLMPriorityGate(settle_seconds=0.0, quiet_seconds=0.0)
-        # Constructed but never started: routes only ever call `notify()` on it,
-        # and a running drain loop would race every assertion in the suite.
-        self.curator = MemoryCurator(
-            memory=self.memory, llm=self.curator_llm, gate=self.llm_gate,
-        )
+        self.llm_gate = LLMPriorityGate()
 
     def build_container(self) -> ServiceContainer:
         return ServiceContainer(
-            vad=self.vad,
-            audio_emotion=self.audio_emotion,
-            whisper=self.whisper,
+            text_vad=self.text_vad,
+            multimodal_vad=self.multimodal_vad,
+            asr=self.asr,
+            emotion_pipeline=self.emotion_pipeline,
             tts=self.tts,
             tts_default_voice=self.tts_default_voice,
+            tts_prosody_depth=self.tts_prosody_depth,
+            tts_pitch_scale=self.tts_pitch_scale,
+            tts_contour_depth=self.tts_contour_depth,
             llm=self.llm,
             memory=self.memory,
             vector=self.vector,
             rag=self.rag,
-            emotion=EmotionService(self.vad),
+            emotion=EmotionService(self.text_vad),
             memory_recent_limit=10,
             memory_recent_char_budget=3000,
-            memory_facts_char_budget=600,
             emotion_executor=ThreadPoolExecutor(max_workers=2),
-            tts_coordinator=TTSInterruptCoordinator(),
             tasks=BackgroundTaskRegistry(),
-            # Near-zero settle so gated background work in tests does not add
-            # real wall-clock delay to every chat assertion.
             llm_gate=self.llm_gate,
-            curator=self.curator,
-            curator_llm=self.curator_llm,
         )
 
 

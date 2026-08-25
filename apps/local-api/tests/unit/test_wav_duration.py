@@ -34,8 +34,8 @@ def test_reads_playback_length_from_the_header():
 def test_scales_with_sample_rate_rather_than_byte_count():
     """@example: the same frame count at 22.05 kHz plays for less time.
 
-    Piper and Kokoro voices run at different rates, so byte length alone would
-    mis-size the hold whenever the configured voice changed.
+    Different Piper voices run at different sample rates, so byte length alone
+    would mis-size the hold whenever the configured voice changed.
     """
     assert wav_duration_seconds(_wav(22050, rate=22050)) == pytest.approx(1.0)
 

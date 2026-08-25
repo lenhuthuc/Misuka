@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from brain.emotion_mapper import map_vad_to_emotion
 
 if TYPE_CHECKING:
-    from service.vad_service import VADService
+    from service.text_vad_service import TextVADService
     from brain.state import RetrievedDoc
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ def extract_memory_vads(docs: list["RetrievedDoc"]) -> list[tuple[float, float, 
 class EmotionService:
     """Infer V/A/D + emotion for text and compute the blended system state."""
 
-    def __init__(self, vad_service: "VADService", current_weight: float = 0.6) -> None:
+    def __init__(self, vad_service: "TextVADService", current_weight: float = 0.6) -> None:
         self._vad = vad_service
         self._current_weight = current_weight
 

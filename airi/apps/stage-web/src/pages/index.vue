@@ -39,7 +39,8 @@ const localMode = useLocalStorage('settings/local-conversation/enabled', true)
 const emotionStore = useEmotionStore()
 
 const localConv = useLocalConversation({
-  language: 'en',
+  // Sherpa-ONNX runs a Vietnamese-only model; 'en' here was never honoured.
+  language: 'vi',
   onEmotion: (e) => { emotionStore.emotion = e },
 })
 const { state: localState, transcript: localTranscript, reply: localReply, error: localError } = localConv

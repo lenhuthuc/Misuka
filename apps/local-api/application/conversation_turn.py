@@ -44,7 +44,6 @@ async def prepare_turn(
     recent_limit: int = 10,
     on_rag_error: Callable[[Exception], None] | None = None,
     history_char_budget: int = 3000,
-    facts_char_budget: int = 600,
     response_policy: "ResponsePolicy | None" = None,
 ) -> TurnContext:
     """Run the RAG-decision + retrieval + message-building steps shared by
@@ -73,12 +72,8 @@ async def prepare_turn(
             if on_rag_error:
                 on_rag_error(exc)
 
-    # Facts are what survives beyond the history window and the vector store's
-    # per-session churn, so they are fetched for every turn rather than only
-    # when retrieval fires.
-    facts = await memory.list_facts()
     messages = build_messages(
-        query, context, recent, history_char_budget, facts, facts_char_budget,
+        query, context, recent, history_char_budget,
         response_policy_instruction=response_policy.instruction if response_policy else "",
     )
 
@@ -88,8 +83,8 @@ async def prepare_turn(
     context_chars = len(context)
     total_chars = sum(len(m["content"]) for m in messages)
     logger.info(
-        "turn prompt | messages=%d docs=%d facts=%d context_chars=%d total_chars=%d",
-        len(messages), len(retrieved_docs), len(facts), context_chars, total_chars,
+        "turn prompt | messages=%d docs=%d context_chars=%d total_chars=%d",
+        len(messages), len(retrieved_docs), context_chars, total_chars,
     )
 
     return TurnContext(messages=messages, generated_queries=generated_queries, retrieved_docs=retrieved_docs)

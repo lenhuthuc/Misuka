@@ -34,13 +34,13 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="print predictions without writing")
     args = parser.parse_args()
 
-    from model.vad_model import load_model
-    from service.vad_service import VADService
+    from model.text_vad import load_text_vad
+    from service.text_vad_service import TextVADService
     from brain.emotion_mapper import map_vad_to_emotion
 
-    model_path = os.getenv("VAD_MODEL_PATH", str(VAD_ROOT / "model" / "vad_bert_final.pt"))
-    model, tokenizer = load_model(model_path)
-    svc = VADService(model, tokenizer)
+    model_path = os.getenv("TEXT_VAD_CHECKPOINT_PATH", str(VAD_ROOT / "model" / "best_text_vad.pt"))
+    model, tokenizer = load_text_vad(model_path)
+    svc = TextVADService(model, tokenizer)
 
     conn = sqlite3.connect(args.db)
     _ensure_columns(conn)

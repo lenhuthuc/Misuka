@@ -91,10 +91,11 @@ Mitsuka/
   {"v": 0.73, "a": 0.55, "d": 0.61}
   ```
   *V, A, D* each range **-1 to 1**.
-- **POST** `/emotion-vad` — multipart audio + `language` field; fuses audio (wav2vec2) and text
-  (Whisper → PhoBERT) V/A/D.
+- **POST** `/emotion-vad` — multipart audio; returns the Sherpa transcript plus `user_vad`,
+  fusing audio (WavLM) and text (PhoBERT) in **0–1**.
 - **POST** `/v1/chat`, **POST** `/v1/chat/stream` (SSE), **POST** `/v1/chat/seed`
-- **POST** `/v1/audio/speech`, **POST** `/v1/audio/speech/stream`, **GET** `/v1/audio/voices`
+- **POST** `/v1/audio/speech` (whole utterance, optional `valence`/`arousal`/`dominance` in
+  **0–1** to drive tempo/pitch/intonation), **GET** `/v1/audio/voices`
 - **POST** `/v1/audio/transcriptions` (OpenAI-compatible)
 
 See [CONTEXT.md](CONTEXT.md) for request/response shapes, the SSE event envelope, and error codes.

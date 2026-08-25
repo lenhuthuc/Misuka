@@ -1,49 +1,41 @@
 import asyncio
-import os
-import tempfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
 from api.dependencies import get_container
 from core.container import ServiceContainer
+from service.audio_preprocessing import AudioDecodeError, prepare_mono_16k
 
-router = APIRouter(prefix="/v1/audio", tags=["Whisper STT"])
+router = APIRouter(prefix="/v1/audio", tags=["Sherpa-ONNX STT"])
 
 
 @router.post("/transcriptions")
 async def transcriptions(
     file: UploadFile = File(...),
     model: str = Form("whisper-1"),
-    language: str | None = Form("en"),
     response_format: str = Form("json"),
-    temperature: float = Form(0.0),
-    prompt: str | None = Form(None),
     container: ServiceContainer = Depends(get_container),
 ):
-    """OpenAI-compatible transcription endpoint.
-    AIRI's openai-compatible-audio-transcription provider posts here.
+    """OpenAI-compatible transcription endpoint (Vietnamese-only, via
+    Sherpa-ONNX). AIRI's openai-compatible-audio-transcription provider posts
+    here — `model`/`response_format` stay for wire compatibility with that
+    client; Whisper-only params (`language`, `prompt`, `temperature`) are gone,
+    since the configured Sherpa model has no language/task switch.
     """
-    suffix = os.path.splitext(file.filename or "audio.wav")[1] or ".wav"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    raw = await file.read()
+    try:
+        samples = prepare_mono_16k(raw)
+    except AudioDecodeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
-        # faster-whisper is synchronous and CPU-heavy. Running it on the
+        # Sherpa's decode is synchronous and CPU-heavy. Running it on the
         # request event loop freezes health checks and every other API route.
         loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(
-            container.emotion_executor,
-            container.whisper.transcribe,
-            tmp_path,
-            language,
-            prompt,
-        )
+        text = await loop.run_in_executor(container.emotion_executor, container.asr.transcribe, samples)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        os.unlink(tmp_path)
 
     if response_format == "text":
         return text

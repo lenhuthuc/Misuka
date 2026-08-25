@@ -19,46 +19,59 @@ class Settings(BaseSettings):
     # Decode here is memory-bandwidth-bound, not compute-bound: measured on
     # DDR4-3200, throughput scales inversely with model file size and ignores
     # thread count and context size entirely. qwen2.5:3b ran 6.93 tok/s against
-    # 13.1 tok/s for 1.5b — an exact 2x for an exact 2x in weights. 1.5b is the
-    # accuracy/latency compromise that keeps spoken turns responsive.
-    ollama_model: str = Field(default="qwen2.5:1.5b")
+    # 13.1 tok/s for 1.5b — an exact 2x for an exact 2x in weights. That makes
+    # file size, not parameter count, the thing to shop on: a newer model of
+    # the same size is free.
+    #
+    # Benchmarked against this app's real system prompt, four spoken turns each
+    # (story, a playful follow-up inside that story, arithmetic, chit-chat):
+    #   qwen2.5:1.5b  degenerates on any turn needing content — announces a
+    #                 story, invents a meta-title, stalls.
+    #   qwen2.5:3b    answered the story turn in *Chinese*. Rule 1 says
+    #                 Vietnamese only; a model that breaks it is not a
+    #                 candidate however fluent the rest is.
+    #   qwen3:4b      2.5GB, and still reasons aloud in English with thinking
+    #                 disabled — spent the whole token ceiling on it in 3 of 4
+    #                 turns and never reached a reply.
+    #   gemma3:4b     best Vietnamese of the four and the warmest in character,
+    #                 but 3.3GB is 2.4x the weights of the pick below.
+    #   qwen3:1.7b    clean Vietnamese in all four, held the 1-3 sentence rule,
+    #                 and played along with the joke turn.
+    # 1.7b wins on being *smaller* than the 3b it replaces (1.4GB vs 1.9GB), so
+    # it is the rare change that is faster and better at once. Being a Qwen3 it
+    # must have thinking off — see `_THINK` in brain/llm_service.py.
+    ollama_model: str = Field(default="qwen3:1.7b")
     llm_temperature: float = Field(default=0.7)
     # A spoken turn that runs past a few sentences costs twice: once to decode
-    # now (~13 tok/s on this CPU) and again on every later turn, since the reply
-    # is re-sent inside the history window. 1024 allowed 2,900-character
-    # answers that pushed prompts past 11k characters after five turns.
+    # now and again on every later turn, since the reply is re-sent inside the
+    # history window. 1024 allowed 2,900-character answers that pushed prompts
+    # past 11k characters after five turns. This ceiling is also what bounds
+    # worst-case time-to-last-token, so it is worth revisiting once the decode
+    # rate on this machine is understood: benchmark runs have ranged from 13
+    # tok/s down to 2.4 tok/s for the same model with no configuration change,
+    # and at the low end 320 tokens is over two minutes of speech.
     llm_max_tokens: int = Field(default=320)
 
     # ── LLM priority gate ────────────────────────────────────────────────────
-    # How long the conversation must stay quiet before background LLM work may
-    # touch the runner. Measured from the end of reply playback (the gate is
-    # told each synthesised clip's duration), so this only has to cover the
-    # pause between hearing an answer and starting the next question. The cost
-    # of setting it too low is not just a queued request: a background prompt
-    # displaces the chat model's cached prefix in Ollama, so even work that
-    # gets cancelled the moment the user speaks still bills ~1s of re-prefill
-    # to the turn it interrupted.
-    llm_quiet_seconds: float = Field(default=20.0)
-
-    # ── Memory curator (background fact extraction) ──────────────────────────
-    # Not the smallest model available, deliberately. Measured on fact-rich
-    # input, qwen2.5:0.5b answered "None" even when the prompt asked for facts
-    # alone, while 1.5b extracted seven usable ones. Reusing the chat model
-    # keeps this free of extra RAM; the cost is that a curator call evicts the
-    # chat model's cached prompt prefix, worth roughly 1s on the following turn.
-    curator_model: str = Field(default="qwen2.5:1.5b")
-    # Exchanges mined per LLM call. Batching amortises prefill, which is the
-    # dominant cost; too large a batch is a longer uninterruptible window.
-    curator_batch_size: int = Field(default=5)
-    # How long a batch waits for a quiet runner before giving up this round.
-    # Must stay comfortably above `llm_quiet_seconds` or no round can ever
-    # outlast the quiet window and the queue only drains between sessions.
-    curator_idle_timeout: float = Field(default=45.0)
-    # Back-off after a round found no quiet moment. The queue is durable, so
-    # waiting costs recall lag rather than lost memories.
-    curator_retry_seconds: float = Field(default=20.0)
-    # A batch the curator keeps failing on is poison; stop retrying it.
-    curator_max_attempts: int = Field(default=3)
+    # Only one question is left for the gate to answer -- has the reply been
+    # heard yet -- so only the two speech timings remain. The quiet-window
+    # setting went with the memory curator, the sole background LLM caller.
+    #
+    # Backstop for the end-of-speech signal the client sends when its playback
+    # queue drains (POST /v1/audio/speech/finished). Exchange indexing waits for
+    # that signal so its embedding does not compete with Piper for cores; if the
+    # page was closed mid-reply the signal never comes, and after this long the
+    # indexing runs regardless rather than dropping the exchange.
+    llm_speech_defer_seconds: float = Field(default=90.0)
+    # How long the client may go without asking for another clip before the
+    # server assumes the reply has finished playing. A reply is spoken one
+    # sentence at a time, so the durations reserved by `/v1/audio/speech` only
+    # cover the sentences requested so far: without this lull, the reservation
+    # runs dry in the gap while the *next* sentence is still rendering, and the
+    # exchange embedding starts on top of that render -- widening the very gap
+    # it read as the end of the reply. Only has to outlast one sentence's
+    # synthesis; the explicit end-of-speech signal short-circuits it.
+    llm_speech_lull_seconds: float = Field(default=6.0)
 
     # ── Embedding model (ONNX / sentence-transformers, CPU-only) ─────────────
     embedding_model_name: str = Field(default="paraphrase-multilingual-MiniLM-L12-v2")
@@ -80,6 +93,13 @@ class Settings(BaseSettings):
     # length and dominates time-to-first-token on a CPU runner, so retrieval
     # recall is traded against latency here rather than left unbounded.
     rag_context_char_budget: int = Field(default=2000)
+    # Cosine floor a hit must clear to reach the prompt. Qdrant always returns
+    # its `top_k` nearest points, however far away they are, so an unrelated
+    # question still retrieved five memories and spent ~900 characters of
+    # prefill on them. Fusion ranks hits against each other and cannot tell
+    # "best of a bad lot" from "relevant", so the floor has to be applied to
+    # the raw similarity, before RRF. 0.0 disables it.
+    rag_min_score: float = Field(default=0.35)
 
     # ── Memory ───────────────────────────────────────────────────────────────
     memory_recent_limit: int = Field(default=10)
@@ -87,10 +107,6 @@ class Settings(BaseSettings):
     # above bounds how many turns are considered; this bounds how much prompt
     # they are allowed to occupy, which is what prefill latency actually tracks.
     memory_recent_char_budget: int = Field(default=3000)
-    # Ceiling on the facts block in the system prompt. Facts are the only
-    # memory that survives across sessions, so they earn prompt space — but the
-    # table only grows and every turn re-sends all of it.
-    memory_facts_char_budget: int = Field(default=600)
 
     # ── Logging ──────────────────────────────────────────────────────────────
     log_level: str = Field(default="INFO")
@@ -100,30 +116,55 @@ class Settings(BaseSettings):
     log_file: str | None = Field(default=None)
     environment: str = Field(default="development")
 
-    # ── VAD (Valence-Arousal-Dominance) text model ────────────────────────────
-    vad_model_path: Path = Field(default=Path("model/vad_bert_final.pt"))
+    # ── VAD (Valence-Arousal-Dominance) checkpoints ───────────────────────────
+    # Trained checkpoints ship in the repo (see model/text_vad.py,
+    # model/multimodal_vad.py for the architectures they load into).
+    text_vad_checkpoint_path: Path = Field(default=Path("model/best_text_vad.pt"))
+    multimodal_vad_checkpoint_path: Path = Field(default=Path("model/best_multimodal_vad.pt"))
 
-    # ── Whisper (speech-to-text) ───────────────────────────────────────────────
-    # `small.en` is the accuracy/latency compromise for accented English on
-    # CPU. `base.en` was fast but too error-prone for speaking practice.
-    whisper_model: str = Field(default="small.en")
-    whisper_device: str = Field(default="cpu")
-    whisper_compute: str = Field(default="int8")
-    whisper_models_dir: Path = Field(default=Path(__file__).parent.parent / "models")
+    # ── Sherpa-ONNX (speech-to-text, Vietnamese-only) ─────────────────────────
+    # Not shipped in the repo (ASR model files are large binaries) — download
+    # csukuangfj2/sherpa-onnx-zipformer-vi-30M-int8-2026-02-09 from Hugging Face
+    # into `sherpa_onnx_model_dir`, or point the four *_path fields at wherever
+    # you already keep it. See README for the exact download command.
+    sherpa_onnx_model_dir: Path = Field(
+        default=Path(__file__).resolve().parents[3] / "assets" / "models" / "sherpa-onnx-zipformer-vi-30M-int8-2026-02-09"
+    )
+    sherpa_onnx_tokens: str = Field(default="")
+    sherpa_onnx_encoder: str = Field(default="")
+    sherpa_onnx_decoder: str = Field(default="")
+    sherpa_onnx_joiner: str = Field(default="")
+    sherpa_onnx_num_threads: int = Field(default=4)
 
     # ── Piper (text-to-speech) ─────────────────────────────────────────────────
     # parents[3] from this file (brain/config.py) is
     # apps/local-api/brain -> apps/local-api -> apps -> <repo root>.
     piper_models_dir: Path = Field(default=Path(__file__).resolve().parents[3] / "assets" / "models" / "voices")
 
-    # ── Kokoro (text-to-speech) ────────────────────────────────────────────────
-    # Heavier than Piper but far more expressive. Measured on this CPU: RTF 0.34
-    # against Piper's 0.057, so still several times faster than real time.
-    # Piper stays installed because Kokoro has no Vietnamese voices.
-    kokoro_models_dir: Path = Field(default=Path(__file__).resolve().parents[3] / "assets" / "models" / "kokoro")
     # Voice used when a request asks for "default". Without this the app's voice
     # was whichever one the registry happened to list first.
-    tts_default_voice: str = Field(default="af_nicole")
+    tts_default_voice: str = Field(default="fusion_E_ling75_acoustic100")
+
+    # How far the agent's V/A/D is allowed to move tempo, pause length and
+    # volume (service/prosody.py). 0.0 renders exactly what Piper would have
+    # rendered on its own; 1.0 is the tuned default. Pitch is deliberately not
+    # on this dial -- see `tts_pitch_scale`.
+    tts_prosody_depth: float = Field(default=1.0, ge=0.0, le=2.0)
+
+    # The voice's pitch, as a multiple of what Piper renders. Constant across
+    # every utterance on purpose: it used to be derived per utterance from
+    # emotion, and once a reply was spoken sentence by sentence each sentence
+    # was scored separately, so one answer came out as a low voice and a high
+    # voice alternating. Applied by rendering longer and resampling, which
+    # invents nothing; slightly above 1.0 reads as bright rather than thin.
+    tts_pitch_scale: float = Field(default=1.06, ge=0.82, le=1.22)
+
+    # Depth of the Fujisaki F0 contour drawn on top of Piper's own intonation.
+    # Off by default: it is per-utterance pitch movement, and with per-sentence
+    # synthesis every sentence restarted its own declination -- high at the
+    # start, low at the end, over and over. Raise it only if replies go back to
+    # being synthesised whole.
+    tts_contour_depth: float = Field(default=0.0, ge=0.0, le=2.0)
 
     # ── CORS ─────────────────────────────────────────────────────────────────
     cors_allow_origins: list[str] = Field(default=["*"])
@@ -132,8 +173,30 @@ class Settings(BaseSettings):
     emotion_executor_max_workers: int = Field(default=4)
 
     @property
-    def resolved_vad_model_path(self) -> Path:
-        return self.vad_model_path if self.vad_model_path.is_absolute() else self.base_dir / self.vad_model_path
+    def resolved_text_vad_checkpoint_path(self) -> Path:
+        path = self.text_vad_checkpoint_path
+        return path if path.is_absolute() else self.base_dir / path
+
+    @property
+    def resolved_multimodal_vad_checkpoint_path(self) -> Path:
+        path = self.multimodal_vad_checkpoint_path
+        return path if path.is_absolute() else self.base_dir / path
+
+    @property
+    def resolved_sherpa_tokens(self) -> str:
+        return self.sherpa_onnx_tokens or str(self.sherpa_onnx_model_dir / "tokens.txt")
+
+    @property
+    def resolved_sherpa_encoder(self) -> str:
+        return self.sherpa_onnx_encoder or str(self.sherpa_onnx_model_dir / "encoder.int8.onnx")
+
+    @property
+    def resolved_sherpa_decoder(self) -> str:
+        return self.sherpa_onnx_decoder or str(self.sherpa_onnx_model_dir / "decoder.onnx")
+
+    @property
+    def resolved_sherpa_joiner(self) -> str:
+        return self.sherpa_onnx_joiner or str(self.sherpa_onnx_model_dir / "joiner.int8.onnx")
 
 
 @lru_cache(maxsize=1)

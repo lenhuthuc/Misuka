@@ -1,134 +1,100 @@
+"""POST /emotion-vad
+
+Runs the user-audio side of the VAD architecture (see
+`service/emotion_pipeline.py`): Sherpa-ONNX transcribes the full recording,
+then WavLM (audio) + PhoBERT (that transcript) jointly produce `user_vad`.
 """
-POST /emotion-vad
-
-Nhận file audio, chạy song song:
-  Branch 1: wav2vec2 → audio VAD (v, a, d) ∈ [-1, 1]
-  Branch 2: faster-whisper → transcript → PhoBERT → text VAD (v, a, d) ∈ [-1, 1]
-
-Fused = audio × 0.7 + text × 0.3
-"""
-
 import asyncio
-import io
 import logging
-import os
-import tempfile
 from pathlib import Path
 
-import librosa
-import numpy as np
-import soundfile as sf
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from api.dependencies import get_container
 from core.container import ServiceContainer
 from core.logging import log_duration
-from schemas.vad import EmotionVADResponse, VADScores
+from schemas.vad import ASRInfo, EmotionVADResponse, UserVAD
+from service.audio_preprocessing import AudioDecodeError
+from service.emotion_pipeline import UserAudioResult
+from service.multimodal_vad_service import VADOutputInvalid
+from service.sherpa_asr_service import SherpaModelFilesMissing
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/emotion-vad", tags=["Emotion VAD"])
 
-_AUDIO_WEIGHT = 0.7
-_TEXT_WEIGHT  = 0.3
 _DEBUG_AUDIO_DIR = Path(__file__).resolve().parents[1] / "debug_audio"
 
 
-def _save_raw_whisper_input(raw: bytes) -> Path:
-    """Persist the exact upload before soundfile/resampling/Whisper touches it."""
+def _save_raw_upload(raw: bytes) -> Path:
+    """Persist the exact upload before decode/resample/ASR touches it."""
     _DEBUG_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-    target = _DEBUG_AUDIO_DIR / "last-whisper-input.wav"
+    target = _DEBUG_AUDIO_DIR / "last-audio-input.wav"
     target.write_bytes(raw)
-    logger.info("Saved raw Whisper input to %s (%d bytes)", target, len(raw))
+    logger.info("Saved raw audio input to %s (%d bytes)", target, len(raw))
     return target
-
-
-def _scale_to_signed(v: float, a: float, d: float) -> VADScores:
-    """PhoBERT outputs [0, 1]. Convert to [-1, 1]."""
-    return VADScores(valence=v , arousal=a, dominance=d)
-
-
-def _fuse(audio: VADScores, text: VADScores) -> VADScores:
-    return VADScores(
-        valence=audio.valence * _AUDIO_WEIGHT + text.valence * _TEXT_WEIGHT,
-        arousal=audio.arousal * _AUDIO_WEIGHT + text.arousal * _TEXT_WEIGHT,
-        dominance=audio.dominance * _AUDIO_WEIGHT + text.dominance * _TEXT_WEIGHT,
-    )
 
 
 @router.post("", response_model=EmotionVADResponse)
 async def emotion_vad(
-    audio_file: UploadFile = File(..., alias="audio"),
-    language: str | None = Form("en"),
+    audio_file: UploadFile | None = File(None, alias="audio"),
+    text: str | None = Form(None),
     container: ServiceContainer = Depends(get_container),
 ) -> EmotionVADResponse:
-    # This request *is* the user talking, and it arrives before the chat turn
-    # it will produce. Telling the gate now abandons any background generation
-    # while Whisper still has work to do, so the runner is free by the time the
-    # turn asks for it — waiting for /v1/chat to open the gate is a step late.
+    # This request *is* the user talking/typing, and it arrives before the
+    # chat turn it will produce. Telling the gate now abandons any background
+    # generation while this route still has work to do, so the runner is free
+    # by the time the turn asks for it — waiting for /v1/chat is a step late.
     container.llm_gate.mark_active()
 
-    raw = await audio_file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Empty audio file.")
+    raw = await audio_file.read() if audio_file is not None else b""
+    if not raw and not text:
+        raise HTTPException(status_code=400, detail="Provide either an 'audio' file or 'text'.")
 
-    _save_raw_whisper_input(raw)
+    loop = asyncio.get_event_loop()
 
-    try:
-        audio_array, orig_sr = sf.read(io.BytesIO(raw))
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Cannot decode audio: {exc}") from exc
-
-    with log_duration(logger, "audio.decode_resample", component="audio"):
-        # Mono downmix + float32
-        if audio_array.ndim > 1:
-            audio_array = audio_array.mean(axis=1)
-        audio_array = audio_array.astype(np.float32)
-
-        # Resample to 16 kHz for wav2vec2 and faster-whisper
-        if orig_sr != 16000:
-            audio_array = librosa.resample(audio_array, orig_sr=orig_sr, target_sr=16000)
-
-    # Write to temp file once — faster-whisper needs a file path
-    suffix = os.path.splitext(audio_file.filename or "audio.wav")[1] or ".wav"
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    try:
-        sf.write(tmp.name, audio_array, 16000)
-        tmp.close()
-
-        loop = asyncio.get_event_loop()
-        executor = container.emotion_executor
-
-        async def _text_branch() -> tuple[str, VADScores]:
-            # ASR → transcript → PhoBERT VAD (sequential within this branch)
-            with log_duration(logger, "whisper.transcribe", component="stt"):
-                transcript: str = await loop.run_in_executor(
-                    executor, container.whisper.transcribe, tmp.name, language
+    if raw:
+        _save_raw_upload(raw)
+        try:
+            with log_duration(logger, "emotion_pipeline.analyze_user_audio", component="emotion"):
+                result: UserAudioResult = await loop.run_in_executor(
+                    container.emotion_executor, container.emotion_pipeline.analyze_user_audio, raw
                 )
-            with log_duration(logger, "vad.predict_text", component="emotion"):
-                v, a, d = await loop.run_in_executor(
-                    executor, container.vad.predict, transcript
-                )
-            return transcript, _scale_to_signed(v, a, d)
+        except AudioDecodeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except SherpaModelFilesMissing as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VADOutputInvalid as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        async def _audio_branch() -> tuple[float, float, float]:
-            with log_duration(logger, "vad.predict_audio", component="emotion"):
-                return await loop.run_in_executor(
-                    executor, container.audio_emotion.predict, audio_array
-                )
-
-        # Both branches run concurrently
-        (av, aa, ad), (transcript, text_vad) = await asyncio.gather(
-            _audio_branch(), _text_branch()
+        return EmotionVADResponse(
+            transcript=result.transcript,
+            asr=ASRInfo(),
+            user_vad=UserVAD(
+                mode="multimodal",
+                valence=result.valence,
+                arousal=result.arousal,
+                dominance=result.dominance,
+            ),
         )
-    finally:
-        os.unlink(tmp.name)
 
-    audio_vad = VADScores(valence=av, arousal=aa, dominance=ad)  # already in [-1, 1]
+    # Text-only fallback: no audio, so no multimodal (WavLM) branch is
+    # possible — never fabricate zero audio/embeddings to force it.
+    try:
+        with log_duration(logger, "emotion_pipeline.analyze_user_text", component="emotion"):
+            result = await loop.run_in_executor(
+                container.emotion_executor, container.emotion_pipeline.analyze_user_text, text
+            )
+    except VADOutputInvalid as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return EmotionVADResponse(
-        transcript=transcript,
-        audio=audio_vad,
-        text=text_vad,
-        fused=_fuse(audio_vad, text_vad),
+        transcript=result.transcript,
+        asr=None,
+        user_vad=UserVAD(
+            mode="text",
+            valence=result.valence,
+            arousal=result.arousal,
+            dominance=result.dominance,
+        ),
     )

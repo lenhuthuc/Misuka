@@ -25,6 +25,7 @@ _turn_id_var: ContextVar[str | None] = ContextVar("turn_id", default=None)
 _EXTRA_FIELDS = (
     "operation", "component", "route", "method", "status_code",
     "duration_ms", "outcome", "error_code", "error_type", "retryable",
+    "chars",
 )
 
 
@@ -95,6 +96,29 @@ class _JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+class _ConsoleFormatter(logging.Formatter):
+    """Human-readable, but not lossy.
+
+    The structured fields the JSON formatter emits were dropped entirely in
+    dev, which made the console's one-line-per-request output read as an
+    undifferentiated wall of "http request" -- no route, no status, and in
+    particular no `duration_ms`, the one number that says which stage of a
+    spoken turn is actually slow. They are appended as `key=value` instead.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
+
+    def format(self, record: logging.LogRecord) -> str:
+        line = super().format(record)
+        fields = [
+            f"{key}={getattr(record, key)}"
+            for key in _EXTRA_FIELDS
+            if getattr(record, key, None) is not None
+        ]
+        return f"{line} | {' '.join(fields)}" if fields else line
+
+
 def configure_logging(
     *,
     service: str = "mitsuka-api",
@@ -122,17 +146,14 @@ def configure_logging(
     if json_output:
         handler.setFormatter(_JsonFormatter(service, environment))
     else:
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            datefmt="%H:%M:%S",
-        ))
+        handler.setFormatter(_ConsoleFormatter())
     handler.addFilter(_CorrelationFilter())
     root.addHandler(handler)
 
 
 @contextmanager
 def log_duration(logger: logging.Logger, operation: str, **extra_fields: Any) -> Iterator[None]:
-    """Log start/end of a key stage (decode, Whisper, RAG, LLM, TTS,
+    """Log start/end of a key stage (decode, ASR, RAG, LLM, TTS,
     background job) with `duration_ms` and `outcome`, without every call site
     hand-rolling timing + try/except. Re-raises whatever the block raises.
     """

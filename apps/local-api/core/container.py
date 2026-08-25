@@ -15,16 +15,16 @@ from typing import TYPE_CHECKING
 from brain.emotion_service import EmotionService
 from core.llm_priority import LLMPriorityGate
 from core.tasks import BackgroundTaskRegistry
-from core.tts_coordinator import TTSInterruptCoordinator
-from model.vad_model import load_model
-from service.audio_emotion_service import AudioEmotionService
+from model.multimodal_vad import load_multimodal_vad
+from model.text_vad import load_text_vad
+from service.emotion_pipeline import EmotionPipeline
+from service.multimodal_vad_service import MultimodalVADService
+from service.sherpa_asr_service import SherpaASRService
+from service.text_vad_service import TextVADService
 from service.tts_service import TTSService
-from service.vad_service import VADService
-from service.whisper_service import WhisperService
 
 if TYPE_CHECKING:
     from brain.config import Settings
-    from brain.curator import MemoryCurator
     from brain.llm_service import LLMService
     from brain.memory_service import MemoryService
     from brain.rag_service import RAGService
@@ -35,11 +35,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ServiceContainer:
-    vad: VADService
-    audio_emotion: AudioEmotionService
-    whisper: WhisperService
+    text_vad: TextVADService
+    multimodal_vad: MultimodalVADService
+    asr: SherpaASRService
+    emotion_pipeline: EmotionPipeline
     tts: TTSService
     tts_default_voice: str
+    tts_prosody_depth: float
+    tts_pitch_scale: float
+    tts_contour_depth: float
     llm: "LLMService"
     memory: "MemoryService"
     vector: "VectorService"
@@ -47,31 +51,39 @@ class ServiceContainer:
     emotion: EmotionService
     memory_recent_limit: int
     memory_recent_char_budget: int
-    memory_facts_char_budget: int
     emotion_executor: ThreadPoolExecutor
-    tts_coordinator: TTSInterruptCoordinator
     tasks: BackgroundTaskRegistry
     llm_gate: LLMPriorityGate
-    curator: "MemoryCurator"
-    curator_llm: "LLMService"
+    # How long the exchange-indexing task waits for the reply to finish being
+    # spoken before giving up on the signal and embedding anyway.
+    index_defer_timeout: float = 90.0
 
     @classmethod
     async def create(cls, settings: "Settings") -> "ServiceContainer":
-        from brain.curator import MemoryCurator
         from brain.embeddings import EmbeddingModel
         from brain.llm_service import LLMService
         from brain.memory_service import MemoryService
         from brain.rag_service import RAGService
         from brain.vector_service import VectorService
 
-        vad_model, tokenizer = load_model(str(settings.resolved_vad_model_path))
-        vad = VADService(vad_model, tokenizer)
-        audio_emotion = AudioEmotionService()
-        whisper = WhisperService(
-            settings.whisper_model, settings.whisper_device, settings.whisper_compute,
-            settings.whisper_models_dir,
+        text_vad_model, text_vad_tokenizer = load_text_vad(str(settings.resolved_text_vad_checkpoint_path))
+        text_vad = TextVADService(text_vad_model, text_vad_tokenizer)
+
+        multimodal_vad_model, multimodal_vad_tokenizer = load_multimodal_vad(
+            str(settings.resolved_multimodal_vad_checkpoint_path)
         )
-        tts = TTSService(settings.piper_models_dir, settings.kokoro_models_dir)
+        multimodal_vad = MultimodalVADService(multimodal_vad_model, multimodal_vad_tokenizer)
+
+        asr = SherpaASRService(
+            tokens=settings.resolved_sherpa_tokens,
+            encoder=settings.resolved_sherpa_encoder,
+            decoder=settings.resolved_sherpa_decoder,
+            joiner=settings.resolved_sherpa_joiner,
+            num_threads=settings.sherpa_onnx_num_threads,
+        )
+        emotion_pipeline = EmotionPipeline(asr, multimodal_vad, text_vad)
+
+        tts = TTSService(settings.piper_models_dir)
 
         embedder = EmbeddingModel(settings.embedding_model_name, settings.embedding_batch_size)
         llm = LLMService(
@@ -97,36 +109,23 @@ class ServiceContainer:
             rrf_k=settings.rag_rrf_k,
             top_k=settings.qdrant_top_k,
             context_char_budget=settings.rag_context_char_budget,
+            min_score=settings.rag_min_score,
         )
-        emotion = EmotionService(vad)
+        emotion = EmotionService(text_vad)
 
-        llm_gate = LLMPriorityGate(quiet_seconds=settings.llm_quiet_seconds)
-        # Its own client even when the model matches the chat one: extraction
-        # wants deterministic output, not the chat temperature or token ceiling.
-        curator_llm = LLMService(
-            base_url=settings.ollama_base_url,
-            model=settings.curator_model,
-            temperature=0.0,
-            max_tokens=400,
-        )
-        curator = MemoryCurator(
-            memory=memory,
-            llm=curator_llm,
-            gate=llm_gate,
-            batch_size=settings.curator_batch_size,
-            idle_timeout=settings.curator_idle_timeout,
-            retry_seconds=settings.curator_retry_seconds,
-            max_attempts=settings.curator_max_attempts,
-        )
-        curator.start()
+        llm_gate = LLMPriorityGate(speech_lull_seconds=settings.llm_speech_lull_seconds)
 
         logger.info("Service container initialized")
         return cls(
-            vad=vad,
-            audio_emotion=audio_emotion,
-            whisper=whisper,
+            text_vad=text_vad,
+            multimodal_vad=multimodal_vad,
+            asr=asr,
+            emotion_pipeline=emotion_pipeline,
             tts=tts,
             tts_default_voice=settings.tts_default_voice,
+            tts_prosody_depth=settings.tts_prosody_depth,
+            tts_pitch_scale=settings.tts_pitch_scale,
+            tts_contour_depth=settings.tts_contour_depth,
             llm=llm,
             memory=memory,
             vector=vector,
@@ -134,23 +133,15 @@ class ServiceContainer:
             emotion=emotion,
             memory_recent_limit=settings.memory_recent_limit,
             memory_recent_char_budget=settings.memory_recent_char_budget,
-            memory_facts_char_budget=settings.memory_facts_char_budget,
             emotion_executor=ThreadPoolExecutor(max_workers=settings.emotion_executor_max_workers),
-            tts_coordinator=TTSInterruptCoordinator(),
             tasks=BackgroundTaskRegistry(),
             llm_gate=llm_gate,
-            curator=curator,
-            curator_llm=curator_llm,
+            index_defer_timeout=settings.llm_speech_defer_seconds,
         )
 
     async def shutdown(self) -> None:
-        # Curator first: it is the only component that keeps working after a
-        # response, and its queue is durable, so stopping it early just defers
-        # whatever it had left rather than losing it.
-        await self.curator.stop()
         await self.tasks.drain()
         self.emotion_executor.shutdown(wait=True)
-        await self.curator_llm.aclose()
         await self.llm.aclose()
         await self.memory.close()
         await self.vector.close()

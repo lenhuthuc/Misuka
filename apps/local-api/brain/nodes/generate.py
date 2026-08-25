@@ -2,42 +2,42 @@ from __future__ import annotations
 
 # Block order is a latency decision, not a stylistic one. Ollama caches the
 # longest matching prompt prefix, so a block placed before one that churns is
-# re-prefilled along with it. These are ordered most-stable first: facts change
-# only when the curator learns something, response policy changes per turn, and
-# retrieved context changes whenever retrieval fires.
+# re-prefilled along with it. These are ordered most-stable first: the rules are
+# fixed, response policy changes per turn, and retrieved context changes
+# whenever retrieval fires.
 #
-# Measured on this setup with the same 606-character facts block: placing it
-# before a changing per-turn block avoids re-prefilling the facts every turn.
+# The instructions are in English on purpose. The runner here is a 1.5B Qwen,
+# and its instruction-following is measurably stronger in English than in
+# Vietnamese — a fully Vietnamese system prompt made it answer "được" to an
+# arithmetic question, and made the 3B answer in Chinese. English rules with an
+# explicit Vietnamese *output* rule was the only combination that held.
+#
+# Rule 5 exists because the previous prompt was a retrieval-QA prompt ("use the
+# provided context to answer... if the context does not contain enough
+# information, say so honestly"). Against this app's actual context — whatever
+# RAG retrieved — that instruction fires on every unrelated question: asked what
+# one plus one is, the model reported that it could not determine the answer
+# from what it had been given.
 SYSTEM_PROMPT = """\
-You are BrainMaster, a helpful and knowledgeable assistant.
-Use the provided context to answer the user's question accurately and concisely.
-If the context does not contain enough information, say so honestly.
-{facts_block}{response_policy_line}
-Context:
+You are Mitsuka, a warm companion having a spoken conversation with the user.
+
+Rules, in priority order:
+1. ALWAYS reply in Vietnamese. Never reply in English or Chinese.
+2. You are being read aloud. Keep it to 1-3 short sentences. No lists, no
+   markdown, no emoji, no code blocks.
+3. The user's words arrive from speech recognition, so they may be misheard,
+   misspelled or missing a word. Answer what they most plausibly meant, and
+   only ask them to repeat if you genuinely cannot guess.
+4. For a factual, arithmetic or general-knowledge question, just answer it from
+   your own knowledge. Answer first, elaborate only if it is short.
+5. The notes below are optional background, NOT the source of your answers.
+   Ignore anything in them unrelated to what was just said, and never tell the
+   user that your notes lack the information.
+6. Only discuss what you are or how you work if the user actually asked.
+{response_policy_line}
+Background notes:
 {context}
 """
-
-
-def _fit_facts(facts: list[dict], char_budget: int) -> str:
-    """Render stored facts as a prompt block, newest first, within a budget.
-
-    Facts are the only part of the prompt that persists across sessions, so
-    they are worth their prefill cost — but the table only grows, and every
-    turn re-sends the whole block. Newest-first means a table that has outgrown
-    the budget keeps what the curator learned most recently.
-    """
-    lines: list[str] = []
-    spent = 0
-    for fact in facts:
-        line = f"- {fact['key']}: {fact['value']}"
-        if lines and spent + len(line) > char_budget:
-            break
-        lines.append(line)
-        spent += len(line)
-
-    if not lines:
-        return ""
-    return "What you know about the user:\n" + "\n".join(lines) + "\n"
 
 
 def _fit_history(recent: list[dict], char_budget: int) -> list[dict[str, str]]:
@@ -66,8 +66,6 @@ def build_messages(
     context: str,
     recent: list[dict],
     history_char_budget: int = 3000,
-    facts: list[dict] | None = None,
-    facts_char_budget: int = 600,
     response_policy_instruction: str = "",
 ) -> list[dict[str, str]]:
     """Build the full message list for a chat completion call.
@@ -76,18 +74,17 @@ def build_messages(
     the caller needs those same rows to tell the retriever which turns the
     prompt already covers, and fetching them twice per turn served nobody.
 
-    Every variable-length part carries its own budget — history, retrieved
-    context, and facts — because prefill cost is linear in prompt length and
-    each of these grows on a different schedule.
+    Both variable-length parts carry their own budget — history and retrieved
+    context — because prefill cost is linear in prompt length and the two grow
+    on different schedules.
 
     Stored output emotion remains metadata for memory and UI. It is not fed
     back as a fixed mood prompt; the current user's VAD produces the small
     behavioural policy passed in by the turn orchestrator.
     """
     history = _fit_history(recent, history_char_budget)
-    facts_block = _fit_facts(facts or [], facts_char_budget)
     response_policy_line = f"{response_policy_instruction}\n" if response_policy_instruction else ""
     system = SYSTEM_PROMPT.format(
-        context=context, response_policy_line=response_policy_line, facts_block=facts_block,
+        context=context, response_policy_line=response_policy_line,
     )
     return [{"role": "system", "content": system}] + history + [{"role": "user", "content": query}]

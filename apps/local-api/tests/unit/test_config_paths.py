@@ -24,16 +24,32 @@ def test_piper_models_dir_default_actually_contains_the_shipped_onnx_voices():
     assert onnx_files, f"expected at least one .onnx voice under {settings.piper_models_dir}"
 
 
-def test_resolved_vad_model_path_stays_inside_apps_local_api():
+def test_resolved_text_vad_checkpoint_path_stays_inside_apps_local_api():
     settings = Settings()
-    assert settings.resolved_vad_model_path == settings.base_dir / "model" / "vad_bert_final.pt"
+    assert settings.resolved_text_vad_checkpoint_path == settings.base_dir / "model" / "best_text_vad.pt"
 
 
-def test_whisper_models_dir_stays_inside_apps_local_api():
+def test_resolved_multimodal_vad_checkpoint_path_stays_inside_apps_local_api():
     settings = Settings()
-    assert settings.whisper_models_dir == settings.base_dir / "models"
+    assert settings.resolved_multimodal_vad_checkpoint_path == settings.base_dir / "model" / "best_multimodal_vad.pt"
 
 
-def test_default_whisper_model_is_optimized_for_english_cpu_usage():
+def test_sherpa_onnx_model_dir_defaults_to_assets_models():
     settings = Settings()
-    assert settings.whisper_model == "small.en"
+    expected_root = Path(__file__).resolve().parents[4]
+    assert settings.sherpa_onnx_model_dir == (
+        expected_root / "assets" / "models" / "sherpa-onnx-zipformer-vi-30M-int8-2026-02-09"
+    )
+
+
+def test_resolved_sherpa_paths_fall_back_to_the_model_dir_when_unset():
+    settings = Settings(sherpa_onnx_tokens="", sherpa_onnx_encoder="", sherpa_onnx_decoder="", sherpa_onnx_joiner="")
+    assert settings.resolved_sherpa_tokens == str(settings.sherpa_onnx_model_dir / "tokens.txt")
+    assert settings.resolved_sherpa_encoder == str(settings.sherpa_onnx_model_dir / "encoder.int8.onnx")
+    assert settings.resolved_sherpa_decoder == str(settings.sherpa_onnx_model_dir / "decoder.onnx")
+    assert settings.resolved_sherpa_joiner == str(settings.sherpa_onnx_model_dir / "joiner.int8.onnx")
+
+
+def test_resolved_sherpa_paths_prefer_explicit_env_override():
+    settings = Settings(sherpa_onnx_tokens="/custom/tokens.txt")
+    assert settings.resolved_sherpa_tokens == "/custom/tokens.txt"

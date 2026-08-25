@@ -21,17 +21,39 @@ class RAGService:
         rrf_k: int = 60,
         top_k: int = 5,
         context_char_budget: int = 2000,
+        min_score: float = 0.0,
     ) -> None:
         self._vector = vector
         self._rrf_k = rrf_k
         self._top_k = top_k
         self._context_char_budget = context_char_budget
+        self._min_score = min_score
 
     async def retrieve(self, query: str) -> tuple[list[str], list[RetrievedDoc]]:
         all_results = await self._vector.search_batch([query], top_k=self._top_k)
+        raw_hits = sum(len(r) for r in all_results)
+        all_results = [self._above_floor(r) for r in all_results]
+        kept = sum(len(r) for r in all_results)
         docs = self._reciprocal_rank_fusion(all_results)
-        logger.info("RAG | raw_hits=%d after_rrf=%d", sum(len(r) for r in all_results), len(docs))
+        logger.info(
+            "RAG | raw_hits=%d above_floor=%d after_rrf=%d", raw_hits, kept, len(docs),
+        )
         return [query], docs
+
+    def _above_floor(self, hits: list) -> list:
+        """Drop hits the vector store returned only because it had to.
+
+        Qdrant answers every query with its `top_k` nearest points regardless
+        of how far away they are, so "is anything relevant here?" is a question
+        only the raw cosine score can answer -- and RRF throws that score away
+        in favour of rank, which is why the decision belongs here rather than
+        after fusion. This is the second half of the `should_use_rag` gate:
+        that one skips retrieval for queries that cannot benefit, this one
+        skips the *context* when retrieval came back empty-handed.
+        """
+        if self._min_score <= 0.0:
+            return hits
+        return [h for h in hits if getattr(h, "score", None) is None or h.score >= self._min_score]
 
     async def build_context(
         self,

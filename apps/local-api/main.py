@@ -30,15 +30,6 @@ from core.logging import configure_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Paths that carry new user input — arriving here interrupts any TTS stream in progress
-_INTERRUPT_PATHS = {
-    "/vad",
-    "/emotion-vad",
-    "/v1/audio/transcriptions",
-    "/v1/chat",
-}
-
-
 def create_app(settings: Settings | None = None) -> FastAPI:
     """App factory — composition only. Model/service construction happens
     inside `lifespan`, not at import time, so importing this module (or
@@ -78,7 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         expose_headers=["X-Request-Id", "X-Turn-Id"],
     )
 
-    app.add_middleware(RequestContextMiddleware, interrupt_paths=frozenset(_INTERRUPT_PATHS))
+    app.add_middleware(RequestContextMiddleware)
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -121,10 +112,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health/ready")
     def health_ready():
-        """All required in-process dependencies (VAD, audio-emotion, Whisper,
-        Piper) constructed successfully — reachable only once lifespan
-        startup has completed, so a failed required dependency means the
-        process never gets here at all (startup raises instead).
+        """All required in-process dependencies (text/multimodal VAD,
+        Sherpa-ONNX ASR, Piper) constructed successfully — reachable only
+        once lifespan startup has completed, so a failed required dependency
+        means the process never gets here at all (startup raises instead).
         """
         return {"status": "ok"}
 

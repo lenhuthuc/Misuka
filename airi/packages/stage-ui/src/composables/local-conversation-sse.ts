@@ -1,31 +1,13 @@
 /**
- * Pure parsing helpers for the local-conversation SSE stream and TTS sentence
- * buffering. Split out from `local-conversation.ts` so the wire-format and
- * text-chunking logic can be unit tested without touching `fetch`/`Audio`.
+ * Pure parsing helpers for the local-conversation SSE stream. Split out from
+ * `local-conversation.ts` so the wire-format logic can be unit tested without
+ * touching `fetch`/`Audio`.
  *
  * The event shapes here mirror the backend's versioned envelope
  * (VAD/schemas/chat.py `ChatStreamEvent`): every event carries a
  * discriminating `type` and a `turnId`, so the client can route on shape
  * instead of guessing from which fields happen to be present.
  */
-
-/** Sentences shorter than this are folded into the next chunk instead of being spoken on their own. */
-export const MIN_SENTENCE_LEN = 5
-
-/**
- * Extract complete sentences from a streaming text buffer.
- *
- * Before: "Hello. How are you? Fine"
- * After:  sentences=["Hello.", "How are you?"], remaining="Fine"
- */
-export function extractSentences(buffer: string): [sentences: string[], remaining: string] {
-  // Split on sentence terminators followed by whitespace
-  const parts = buffer.split(/(?<=[.!?])\s+/)
-  if (parts.length <= 1)
-    return [[], buffer]
-  const sentences = parts.slice(0, -1).map(s => s.trim()).filter(s => s.length >= MIN_SENTENCE_LEN)
-  return [sentences, parts[parts.length - 1]]
-}
 
 /**
  * Formats an HTTP failure message, appending the server's request id (from
@@ -43,14 +25,21 @@ export function describeHttpFailure(action: string, status: number, requestId: s
   return `${action} (${status})${suffix}`
 }
 
+/** V/A/D triple, in whichever range the carrying event documents. */
+export interface VADTriple {
+  valence: number
+  arousal: number
+  dominance: number
+}
+
 /** A single decoded `/v1/chat/stream` SSE event, discriminated by `type`. */
 export type ChatStreamEvent
   = | { type: 'delta', turnId: string, content: string }
-    | { type: 'emotion', turnId: string, emotion: string, state: { valence: number, arousal: number, dominance: number } }
+    | { type: 'emotion', turnId: string, emotion: string, state: VADTriple }
     | { type: 'error', turnId: string, code: string, message: string, retryable: boolean }
-    | { type: 'done', turnId: string }
+    | { type: 'done', turnId: string, agentVad?: VADTriple }
 
-function isVADState(value: unknown): value is { valence: number, arousal: number, dominance: number } {
+function isVADState(value: unknown): value is VADTriple {
   if (typeof value !== 'object' || value === null)
     return false
   const state = value as Record<string, unknown>
@@ -111,7 +100,13 @@ export function parseChatStreamLine(line: string): ChatStreamEvent | null {
     }
 
     case 'done':
-      return { type: 'done', turnId }
+      // `agent_vad` is the reply's own text-only V/A/D in [0, 1] — distinct
+      // from the `emotion` event's blended state in [-1, 1], and the range the
+      // TTS prosody model expects. Absent when inference failed server-side,
+      // in which case speech falls back to the voice's own delivery.
+      return isVADState(obj.agent_vad)
+        ? { type: 'done', turnId, agentVad: obj.agent_vad }
+        : { type: 'done', turnId }
 
     default:
       return null

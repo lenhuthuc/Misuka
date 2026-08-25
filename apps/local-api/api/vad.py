@@ -9,5 +9,7 @@ router = APIRouter(prefix="/vad", tags=["VAD"])
 
 @router.post("", response_model=VADResponse)
 def predict(body: VADRequest, container: ServiceContainer = Depends(get_container)):
-    v, a, d = container.vad.predict(body.text)
+    # Legacy contract: signed [-1, 1], via TextVADService.predict() (an alias
+    # for predict_signed()) — unchanged for any existing caller of this route.
+    v, a, d = container.text_vad.predict(body.text)
     return VADResponse(v=v, a=a, d=d)

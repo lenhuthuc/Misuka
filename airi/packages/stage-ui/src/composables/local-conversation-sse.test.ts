@@ -1,25 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { describeHttpFailure, extractSentences, MIN_SENTENCE_LEN, parseChatStreamLine } from './local-conversation-sse'
-
-describe('extractSentences', () => {
-  it('splits complete sentences off a streaming buffer, keeping the tail unterminated', () => {
-    const [sentences, remaining] = extractSentences('Hello. How are you? Fine')
-    expect(sentences).toEqual(['Hello.', 'How are you?'])
-    expect(remaining).toBe('Fine')
-  })
-
-  it('returns no sentences when the buffer has no terminator yet', () => {
-    const [sentences, remaining] = extractSentences('Hello there')
-    expect(sentences).toEqual([])
-    expect(remaining).toBe('Hello there')
-  })
-
-  it(`drops sentences shorter than MIN_SENTENCE_LEN (${MIN_SENTENCE_LEN})`, () => {
-    const [sentences] = extractSentences('Hi. How are you? Fine')
-    expect(sentences).toEqual(['How are you?'])
-  })
-})
+import { describeHttpFailure, parseChatStreamLine } from './local-conversation-sse'
+import { speechRequestBody } from './local-conversation-tts'
 
 describe('parseChatStreamLine', () => {
   it('parses a content delta', () => {
@@ -29,6 +11,22 @@ describe('parseChatStreamLine', () => {
 
   it('parses a done event', () => {
     expect(parseChatStreamLine('data: {"type":"done","turn_id":"t1"}')).toEqual({ type: 'done', turnId: 't1' })
+  })
+
+  it('carries agent_vad off the done event, since that is what shapes TTS prosody', () => {
+    const event = parseChatStreamLine(
+      'data: {"type":"done","turn_id":"t1","agent_vad":{"mode":"text","valence":0.7,"arousal":0.6,"dominance":0.4}}',
+    )
+    expect(event).toEqual({
+      type: 'done',
+      turnId: 't1',
+      agentVad: { mode: 'text', valence: 0.7, arousal: 0.6, dominance: 0.4 },
+    })
+  })
+
+  it('omits agentVad when the server could not infer it, rather than inventing a neutral one', () => {
+    const event = parseChatStreamLine('data: {"type":"done","turn_id":"t1","agent_vad":null}')
+    expect(event).toEqual({ type: 'done', turnId: 't1' })
   })
 
   it('parses an in-band error payload with code/message/retryable', () => {
@@ -110,5 +108,35 @@ describe('describeHttpFailure', () => {
 
   it('appends the request id when present, for correlating to server logs', () => {
     expect(describeHttpFailure('Chat failed', 500, 'req-abc123')).toBe('Chat failed (500) [request req-abc123]')
+  })
+})
+
+describe('speechRequestBody', () => {
+  it('asks the server to derive prosody when the caller has no reading', () => {
+    // A sentence spoken mid-stream never has one: the reply's own V/A/D is
+    // only inferred once the whole reply exists, which is after every sentence
+    // of it has already been queued. Without this the reply would be spoken in
+    // the voice's flat default delivery.
+    expect(speechRequestBody('Xin chào bạn.')).toEqual({
+      input: 'Xin chào bạn.',
+      voice: 'default',
+      auto_prosody: true,
+    })
+  })
+
+  it('passes V/A/D through when the turn produced a reading', () => {
+    expect(speechRequestBody('xin chào', { valence: 0.7, arousal: 0.6, dominance: 0.4 })).toEqual({
+      input: 'xin chào',
+      voice: 'default',
+      valence: 0.7,
+      arousal: 0.6,
+      dominance: 0.4,
+    })
+  })
+
+  it('never mixes a measured reading with the derived one', () => {
+    expect(speechRequestBody('xin chào', { valence: 0.7, arousal: 0.6, dominance: 0.4 }))
+      .not
+      .toHaveProperty('auto_prosody')
   })
 })

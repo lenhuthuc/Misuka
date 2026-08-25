@@ -28,16 +28,13 @@ Send = Callable[[dict[str, Any]], Awaitable[None]]
 class RequestContextMiddleware:
     """Assigns/echoes `X-Request-Id`, binds it for the duration of the
     request, logs one structured line per request (route, method,
-    status_code, duration_ms, outcome), and cancels any in-flight TTS stream
-    when a new-input path is hit — replaces three previously separate
-    concerns (a request-id middleware, a logging middleware, and the
-    TTS-interrupt middleware) that all needed the same "wrap the whole
-    request" shape.
+    status_code, duration_ms, outcome) — replaces two previously separate
+    concerns (a request-id middleware and a logging middleware) that both
+    needed the same "wrap the whole request" shape.
     """
 
-    def __init__(self, app: Callable, interrupt_paths: frozenset[str]) -> None:
+    def __init__(self, app: Callable) -> None:
         self.app = app
-        self._interrupt_paths = interrupt_paths
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -67,8 +64,6 @@ class RequestContextMiddleware:
             await send(message)
 
         with bind_request_id(request_id):
-            if method == "POST" and path in self._interrupt_paths:
-                scope["app"].state.container.tts_coordinator.cancel_active()
             await self.app(scope, receive, send_wrapper)
 
         duration_ms = round((time.perf_counter() - start) * 1000, 1)

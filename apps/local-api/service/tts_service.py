@@ -1,38 +1,37 @@
-"""Text-to-speech over two engines behind one voice registry.
+"""Text-to-speech via Piper, behind a small voice registry.
 
-Piper is fast but flat: its voices come from read-speech corpora and the
-architecture carries no emotion conditioning, so every voice sounds like a
-newsreader. Kokoro is roughly six times heavier — measured RTF 0.34 against
-Piper's 0.057 on this CPU, both far under real time — and buys genuine vocal
-character. Neither replaces the other: Kokoro has no Vietnamese, so Piper stays
-for that, and the choice is per voice id rather than global.
+Piper is fast (measured RTF 0.057 on this CPU, far under real time) and has
+Vietnamese voices, which is what this app needs -- the alternative Kokoro
+backend (no Vietnamese, ~6x heavier) has been removed.
+
+Synthesis renders the **whole** utterance in one call and returns complete WAV
+bytes. It used to be driven sentence-by-sentence from the client, which cost a
+sentence-boundary bug (the tail of a reply was spoken, then the whole reply was
+spoken again) and made prosody impossible: a contour that spans a clause cannot
+be planned from one clause at a time. Piper's RTF leaves no latency argument
+for splitting it either.
 
 Synthesis is deliberately synchronous here and pushed to a thread by callers.
-At Kokoro's ~2s per reply, running it on the event loop would stall every other
-request, including an in-flight chat stream.
 """
 
 import io
+import logging
 import wave
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from piper import PiperVoice
+from piper.config import SynthesisConfig
 
+from service import prosody
+from service.prosody import ProsodyPlan, SpokenSpan
 
-def _wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
-    """Pack mono float32 samples in [-1, 1] into a 16-bit PCM WAV container."""
-    clipped = np.clip(samples, -1.0, 1.0)
-    pcm16 = (clipped * 32767.0).astype("<i2")
+logger = logging.getLogger(__name__)
 
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm16.tobytes())
-    return buf.getvalue()
+# Control-rate for the Fujisaki contour. 200 Hz resolves the ~50 ms accent
+# rises the model produces without evaluating the filters per audio sample.
+_CONTOUR_RATE_HZ = 200.0
 
 
 @dataclass
@@ -42,16 +41,14 @@ class _PiperVoiceEntry:
     config: Path
     _voice: PiperVoice | None = None
 
-    def render_wav(self, text: str) -> bytes:
+    def load(self) -> PiperVoice:
         if self._voice is None:
-            print(f"[Piper] Loading voice '{self.id}' from {self.path.name} ...")
+            logger.info("piper | loading voice %r from %s", self.id, self.path.name)
             self._voice = PiperVoice.load(str(self.path), config_path=str(self.config))
-            print(f"[Piper] Voice '{self.id}' ready (sample_rate={self._voice.config.sample_rate})")
-
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            self._voice.synthesize_wav(text, wf)
-        return buf.getvalue()
+            logger.info(
+                "piper | voice %r ready (sample_rate=%d)", self.id, self._voice.config.sample_rate,
+            )
+        return self._voice
 
 
 def _discover_piper_voices(models_dir: Path) -> dict[str, _PiperVoiceEntry]:
@@ -75,88 +72,145 @@ def _discover_piper_voices(models_dir: Path) -> dict[str, _PiperVoiceEntry]:
     return voices
 
 
-class _KokoroBackend:
-    """Lazily-loaded Kokoro engine; one 310MB model serves all of its voices.
-
-    Loading is deferred because the model costs about a second and a deployment
-    may never ask for a Kokoro voice.
-    """
-
-    def __init__(self, model_path: Path, voices_path: Path) -> None:
-        self._model_path = model_path
-        self._voices_path = voices_path
-        self._kokoro = None
-
-    def available(self) -> bool:
-        return self._model_path.exists() and self._voices_path.exists()
-
-    def voice_ids(self) -> list[str]:
-        """Voice names read without loading the model: the embeddings file is a
-        plain npz, so listing costs nothing at startup."""
-        if not self.available():
-            return []
-        with np.load(self._voices_path) as data:
-            return sorted(data.files)
-
-    def render_wav(self, voice_id: str, text: str) -> bytes:
-        if self._kokoro is None:
-            from kokoro_onnx import Kokoro
-
-            print(f"[Kokoro] Loading {self._model_path.name} ...")
-            self._kokoro = Kokoro(str(self._model_path), str(self._voices_path))
-            print("[Kokoro] Ready.")
-
-        samples, sample_rate = self._kokoro.create(text, voice=voice_id, speed=1.0, lang="en-us")
-        return _wav_bytes(np.asarray(samples), sample_rate)
+def _to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
+    pcm = np.clip(audio, -1.0, 1.0)
+    pcm = (pcm * 32767.0).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm.tobytes())
+    return buf.getvalue()
 
 
 class TTSService:
-    """Resolves a voice id to whichever engine owns it and renders WAV bytes.
+    """Resolves a voice id to its Piper voice and renders WAV bytes.
 
     Use when: the app needs text-to-speech. Construct exactly once, inside the
     service container.
 
-    Expects: `synthesize_wav` to be called off the event loop — it blocks for
-    as long as synthesis takes.
+    Expects: `synthesize_wav` to be called off the event loop -- it blocks for
+    as long as synthesis plus prosody post-processing takes.
 
-    Returns: complete 16-bit PCM WAV bytes, ready to stream to a client.
+    Returns: complete 16-bit PCM WAV bytes for the whole utterance, ready to
+    hand to a client in one response.
     """
 
-    def __init__(self, piper_models_dir: Path, kokoro_models_dir: Path | None = None) -> None:
+    def __init__(self, piper_models_dir: Path) -> None:
         self._piper = _discover_piper_voices(piper_models_dir)
 
-        self._kokoro: _KokoroBackend | None = None
-        kokoro_ids: list[str] = []
-        if kokoro_models_dir is not None:
-            backend = _KokoroBackend(
-                kokoro_models_dir / "kokoro-v1.0.onnx",
-                kokoro_models_dir / "voices-v1.0.bin",
-            )
-            if backend.available():
-                self._kokoro = backend
-                kokoro_ids = backend.voice_ids()
-
-        # Piper first so a name present in both keeps its existing meaning.
-        self._kokoro_ids = [vid for vid in kokoro_ids if vid not in self._piper]
-
-        if not self._piper and not self._kokoro_ids:
-            print(f"[TTS] WARNING: no voice found in {piper_models_dir} or {kokoro_models_dir}")
+        if not self._piper:
+            logger.warning("tts | no Piper voice found in %s", piper_models_dir)
         else:
-            print(f"[TTS] Piper: {list(self._piper)}")
-            print(f"[TTS] Kokoro: {len(self._kokoro_ids)} voice(s)")
+            logger.info("tts | Piper voices: %s", list(self._piper))
 
     def list_voices(self) -> list[dict]:
-        return (
-            [{"id": vid, "name": vid, "engine": "piper"} for vid in self._piper]
-            + [{"id": vid, "name": vid, "engine": "kokoro"} for vid in self._kokoro_ids]
-        )
+        return [{"id": vid, "name": vid, "engine": "piper"} for vid in self._piper]
 
     def has_voice(self, voice_id: str) -> bool:
-        return voice_id in self._piper or voice_id in self._kokoro_ids
+        return voice_id in self._piper
 
-    def synthesize_wav(self, voice_id: str, text: str) -> bytes:
-        if entry := self._piper.get(voice_id):
-            return entry.render_wav(text)
-        if self._kokoro is not None and voice_id in self._kokoro_ids:
-            return self._kokoro.render_wav(voice_id, text)
-        raise KeyError(voice_id)
+    def synthesize_wav(self, voice_id: str, text: str, plan: ProsodyPlan | None = None) -> bytes:
+        """Render `text` as one complete WAV, shaped by `plan`.
+
+        `plan=None` renders with the voice's own defaults -- the behaviour
+        every caller had before prosody existed.
+        """
+        entry = self._piper.get(voice_id)
+        if entry is None:
+            raise KeyError(voice_id)
+
+        voice = entry.load()
+        sample_rate = voice.config.sample_rate
+        plan = plan or ProsodyPlan()
+
+        audio, spans = self._render_sentences(voice, text, sample_rate, plan)
+        if audio.size == 0:
+            return _to_wav_bytes(audio, sample_rate)
+
+        audio = self._apply_prosody(audio, sample_rate, spans, plan)
+        return _to_wav_bytes(audio, sample_rate)
+
+    def _render_sentences(
+        self, voice: PiperVoice, text: str, sample_rate: int, plan: ProsodyPlan,
+    ) -> tuple[np.ndarray, list[SpokenSpan]]:
+        """Synthesize every sentence and lay them out on one timeline.
+
+        Piper yields one chunk per sentence and no silence between them, so the
+        pause is inserted here -- and because the layout is built rather than
+        measured afterwards, each sentence's exact start/end is known and the
+        Fujisaki commands can be placed against real boundaries instead of an
+        even split of the total duration.
+
+        `length_scale` is pre-multiplied by `pitch_scale`: the resampling step
+        that raises the pitch shortens the audio by the same factor, so asking
+        Piper for a proportionally longer render is what makes the final tempo
+        come out at `plan.length_scale` exactly.
+        """
+        syn_config = SynthesisConfig(
+            length_scale=plan.length_scale * plan.pitch_scale,
+            noise_w_scale=plan.noise_w_scale,
+            normalize_audio=True,
+        )
+
+        chunks = [
+            chunk.audio_float_array
+            for chunk in voice.synthesize(text, syn_config=syn_config)
+            if chunk.audio_float_array.size
+        ]
+        if not chunks:
+            return np.zeros(0, dtype=np.float32), []
+
+        # Sentence texts are only needed for syllable counts and question
+        # marks. When espeak disagrees with our splitter about how many
+        # sentences there are, fall back to the whole text rather than pairing
+        # a chunk with the wrong sentence's syllable count.
+        sentences = prosody.split_sentences(text)
+        if len(sentences) != len(chunks):
+            sentences = [text] * len(chunks)
+
+        pause = np.zeros(int(plan.sentence_pause_s * sample_rate), dtype=np.float32)
+        pieces: list[np.ndarray] = []
+        spans: list[SpokenSpan] = []
+        cursor = 0
+
+        for index, (chunk, sentence) in enumerate(zip(chunks, sentences)):
+            if index:
+                pieces.append(pause)
+                cursor += pause.size
+            resampled = prosody.resample_by(np.asarray(chunk, dtype=np.float32), plan.pitch_scale)
+            pieces.append(resampled)
+            spans.append(SpokenSpan(
+                start=cursor / sample_rate,
+                end=(cursor + resampled.size) / sample_rate,
+                syllables=max(prosody.count_syllables(sentence), 1),
+                is_question=sentence.rstrip().endswith("?"),
+            ))
+            cursor += resampled.size
+
+        return np.concatenate(pieces).astype(np.float32), spans
+
+    def _apply_prosody(
+        self, audio: np.ndarray, sample_rate: int, spans: list[SpokenSpan], plan: ProsodyPlan,
+    ) -> np.ndarray:
+        """Bend the rendered waveform onto the plan's Fujisaki contour."""
+        if not plan.alters_waveform:
+            return audio
+
+        if plan.contour_depth > 1e-3 and spans:
+            phrases, accents = prosody.plan_commands(spans, plan)
+            ln_f0 = prosody.fujisaki_ln_f0(
+                phrases, accents, audio.size / sample_rate, _CONTOUR_RATE_HZ,
+            )
+            ratio = prosody.contour_to_ratio(ln_f0, _CONTOUR_RATE_HZ, audio.size, sample_rate)
+            logger.debug(
+                "tts | fujisaki contour | phrases=%d accents=%d ratio=[%.3f, %.3f]",
+                len(phrases), len(accents), float(ratio.min()), float(ratio.max()),
+            )
+            audio = prosody.pitch_shift_variable(audio, ratio, sample_rate)
+
+        if abs(plan.volume - 1.0) >= 1e-3:
+            audio = audio * plan.volume
+
+        return prosody.soft_limit(audio)

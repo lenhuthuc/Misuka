@@ -76,9 +76,10 @@ export const useEmotionStore = defineStore('modules:emotion', () => {
   }
 
   /**
-   * Send a WAV audio blob to the `/emotion-vad` endpoint (audio + text fusion).
-   * Updates `emotion` with the fused VAD scores. Used in local conversation mode
-   * where we have the raw audio buffer from the VAD worklet.
+   * Send a WAV audio blob to the `/emotion-vad` endpoint, which runs Sherpa ASR
+   * and the multimodal (WavLM + PhoBERT) checkpoint over the same recording.
+   * Updates `emotion` with the resulting `user_vad`. Used in local conversation
+   * mode where we have the raw audio buffer from the VAD worklet.
    *
    * Silently swallows errors so a service outage never breaks the main flow.
    */
@@ -105,16 +106,24 @@ export const useEmotionStore = defineStore('modules:emotion', () => {
         return undefined
       }
 
+      // VAD/schemas/vad.py's EmotionVADResponse. The separate `audio`/`text`/
+      // `fused` heads this used to read went away when the two-model fusion was
+      // replaced by one multimodal checkpoint, so every call was landing in the
+      // catch block below and silently reporting no emotion.
       const data = await res.json() as {
         transcript: string
-        audio: { valence: number, arousal: number, dominance: number }
-        text: { valence: number, arousal: number, dominance: number }
-        fused: { valence: number, arousal: number, dominance: number }
+        user_vad?: { valence: number, arousal: number, dominance: number }
       }
+      if (!data.user_vad) {
+        error.value = 'emotion-vad returned no user_vad'
+        return undefined
+      }
+      // The checkpoint's native range is [0, 1]; `emotion` is the signed
+      // [-1, 1] convention the Live2D driver reads.
       emotion.value = {
-        v: data.fused.valence,
-        a: data.fused.arousal,
-        d: data.fused.dominance,
+        v: data.user_vad.valence * 2 - 1,
+        a: data.user_vad.arousal * 2 - 1,
+        d: data.user_vad.dominance * 2 - 1,
       }
       return emotion.value
     }

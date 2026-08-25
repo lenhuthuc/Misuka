@@ -126,8 +126,8 @@ def test_tts_speech():
 
 # ─── /v1/audio/transcriptions ─────────────────────────────────────────────────
 
-def test_whisper():
-    print("\n[Whisper STT]")
+def test_stt():
+    print("\n[Sherpa-ONNX STT]")
     results = []
 
     wav_bytes = _make_wav_bytes()
@@ -161,7 +161,7 @@ def main():
         "vad":         test_vad(),
         "tts_voices":  test_tts_voices(),
         "tts_speech":  test_tts_speech(),
-        "whisper":     test_whisper(),
+        "stt":         test_stt(),
         "models":      test_models(),
     }
 
