@@ -36,3 +36,4 @@ Thumbs.db
 .env.local
 !.env.example
 assets/models/LLM/*.gguf
+assets/models/LLM/*.gguf
