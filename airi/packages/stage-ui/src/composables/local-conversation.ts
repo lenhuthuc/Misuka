@@ -15,7 +15,7 @@ export interface EmotionVAD {
 }
 
 export interface UseLocalConversationOptions {
-  /** Base URL of the Python VAD/Brain service. Default: http://localhost:8000 */
+  /** Base URL of the Python VAD/Brain service. Default: http://127.0.0.1:8010 */
   baseUrl?: string
   /** BCP-47 language code sent with the audio. Default: vi (Vietnamese) */
   language?: string
@@ -43,7 +43,7 @@ export interface UseLocalConversationOptions {
  * Barge-in: calling onSpeechStart() aborts synthesis and playback immediately.
  */
 export function useLocalConversation(options: UseLocalConversationOptions = {}) {
-  const baseUrl = (options.baseUrl ?? 'http://localhost:8000').replace(/\/+$/, '')
+  const baseUrl = (options.baseUrl ?? 'http://127.0.0.1:8010').replace(/\/+$/, '')
   const language = options.language ?? 'vi'
   const onEmotion = options.onEmotion
 
@@ -51,6 +51,12 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
   const transcript = ref('')
   const reply = ref('')
   const error = ref<string>()
+  // Incremented at the start of every turn, and paired with clearing
+  // `transcript`/`reply` there. A UI rendering a thread needs to tell two turns
+  // apart, and the text refs alone cannot do that: asking the same question
+  // twice in a row leaves `transcript` on the same string, so a watcher on it
+  // never fires for the second turn.
+  const turn = ref(0)
 
   // Local mode does not go through the cloud speech pipeline, so nothing else
   // populates the speaking store — without this the avatar stays mute-faced
@@ -107,6 +113,131 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     }
   }
 
+  /** Run the shared Chat -> TTS half of a speech or typed turn. */
+  async function respond(text: string, abort: AbortController, myGeneration: number) {
+    const superseded = () => myGeneration !== _generation || abort.signal.aborted
+
+    transcript.value = text
+    state.value = 'thinking'
+
+    let response = ''
+    let pendingSpeech = ''
+    let spokeAnything = false
+
+    try {
+      const r = await fetch(`${baseUrl}/v1/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: text }),
+        signal: abort.signal,
+      })
+      if (!r.ok)
+        throw new Error(describeHttpFailure('Chat failed', r.status, r.headers.get('X-Request-Id')))
+      if (!r.body)
+        throw new Error('Chat stream response has no body')
+
+      const reader = r.body.getReader()
+      const decoder = new TextDecoder()
+      let lineBuffer = ''
+      let streamDone = false
+
+      while (!streamDone) {
+        const { done, value } = await reader.read()
+        if (superseded())
+          return
+        if (done)
+          break
+
+        lineBuffer += decoder.decode(value, { stream: true })
+        const lines = lineBuffer.split('\n')
+        lineBuffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          const event = parseChatStreamLine(line)
+          if (!event)
+            continue
+          if (event.type === 'done') {
+            streamDone = true
+            break
+          }
+          if (event.type === 'error') {
+            error.value = event.message
+            continue
+          }
+          if (event.type === 'emotion') {
+            onEmotion?.({ v: event.state.valence, a: event.state.arousal, d: event.state.dominance })
+            continue
+          }
+
+          response += event.content
+          reply.value = response
+          pendingSpeech += event.content
+          const [chunks, remaining] = extractSpeakableChunks(pendingSpeech)
+          pendingSpeech = remaining
+
+          for (const chunk of chunks) {
+            tts.enqueue(chunk, undefined, abort)
+            if (!spokeAnything) {
+              spokeAnything = true
+              state.value = 'speaking'
+            }
+          }
+        }
+      }
+    }
+    catch (e) {
+      if (!superseded()) {
+        error.value = errorMessageFrom(e) ?? 'chat stream request failed'
+        state.value = 'idle'
+        _releaseSpeechFlag()
+      }
+      return
+    }
+
+    if (superseded())
+      return
+    if (!response.trim()) {
+      state.value = 'idle'
+      _releaseSpeechFlag()
+      return
+    }
+
+    reply.value = response.trim()
+    const tail = pendingSpeech.trim()
+    if (tail) {
+      tts.enqueue(tail, undefined, abort)
+      if (!spokeAnything)
+        state.value = 'speaking'
+    }
+
+    await tts.drain()
+    if (superseded())
+      return
+
+    _releaseSpeechFlag()
+    if (state.value === 'speaking')
+      state.value = 'idle'
+  }
+
+  /** Start a local-api conversation turn from text typed in the Mitsuka UI. */
+  async function processText(input: string) {
+    const text = input.trim()
+    if (!text)
+      return
+
+    _stopAll()
+    mouthOpenSource.value = 'local-conversation'
+    const myGeneration = ++_generation
+    turn.value++
+    const abort = new AbortController()
+    _abort = abort
+    error.value = undefined
+    transcript.value = ''
+    reply.value = ''
+
+    await respond(text, abort, myGeneration)
+  }
+
   /** Call with the WAV blob when user finishes speaking. Runs full STT → Chat → TTS pipeline. */
   async function process(audioBlob: Blob | undefined) {
     console.info('[localConv] process() | blob size:', audioBlob?.size ?? 'undefined')
@@ -116,6 +247,7 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     _stopAll()
     mouthOpenSource.value = 'local-conversation'
     const myGeneration = ++_generation
+    turn.value++
     const abort = new AbortController()
     _abort = abort
     // True once either a newer turn has started, or this turn was itself
@@ -123,6 +255,10 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     const superseded = () => myGeneration !== _generation || abort.signal.aborted
 
     error.value = undefined
+    // A voice turn only learns its transcript once STT returns; leaving the
+    // previous turn's text in place until then would show it against this one.
+    transcript.value = ''
+    reply.value = ''
 
     // ── 1. emotion-vad: Sherpa STT + audio emotion analysis (one call) ───────
     // /emotion-vad runs Sherpa-ONNX + WavLM + PhoBERT over the same recording
@@ -324,6 +460,7 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
   function reset() {
     _stopAll()
     _generation++
+    turn.value++
     state.value = 'idle'
     transcript.value = ''
     reply.value = ''
@@ -332,11 +469,13 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
 
   return {
     state,
+    turn,
     transcript,
     reply,
     error,
     onSpeechStart,
     process,
+    processText,
     reset,
   }
 }

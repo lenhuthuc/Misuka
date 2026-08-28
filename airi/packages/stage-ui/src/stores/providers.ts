@@ -1565,7 +1565,7 @@ export const useProvidersStore = defineStore('providers', () => {
       description: 'localhost Piper TTS',
       category: 'speech',
       tasks: ['text-to-speech'],
-      defaultBaseUrl: 'http://localhost:8000/v1/',
+      defaultBaseUrl: 'http://127.0.0.1:8010/v1/',
       requiresCredentials: false,
       creator: createOpenAI,
       capabilities: {
@@ -1641,9 +1641,9 @@ export const useProvidersStore = defineStore('providers', () => {
       description: 'localhost VieNeu TTS — giọng nói tiếng Việt',
       icon: 'i-solar:microphone-3-bold-duotone',
       requiresCredentials: false,
-      defaultOptions: () => ({ baseUrl: 'http://localhost:8000/v1/' }),
+      defaultOptions: () => ({ baseUrl: 'http://127.0.0.1:8010/v1/' }),
       createProvider: async (config) => {
-        const baseURL = ((config.baseUrl as string) || 'http://localhost:8000/v1/').replace(/\/?$/, '/')
+        const baseURL = ((config.baseUrl as string) || 'http://127.0.0.1:8010/v1/').replace(/\/?$/, '/')
         return {
           speech: () => ({ baseURL, model: 'vieneu' }),
         } as SpeechProvider
@@ -1661,7 +1661,7 @@ export const useProvidersStore = defineStore('providers', () => {
         ],
         listVoices: async (config) => {
           try {
-            const base = ((config.baseUrl as string) || 'http://localhost:8000/v1/').replace(/\/+$/, '')
+            const base = ((config.baseUrl as string) || 'http://127.0.0.1:8010/v1/').replace(/\/+$/, '')
             const res = await fetch(`${base}/audio/voices`, { signal: AbortSignal.timeout(3000) })
             if (!res.ok)
               return []

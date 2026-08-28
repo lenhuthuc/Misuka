@@ -3,7 +3,7 @@ LEGACY / standalone — not part of the production entry point.
 
 apps/local-api/main.py is the one true production entry point and already
 serves an equivalent OpenAI-compatible /v1/audio/transcriptions endpoint
-(apps/local-api/api/whisper.py) on port 8000. This file is kept only as a
+(apps/local-api/api/whisper.py) on port 8010. This file is kept only as a
 minimal, dependency-light Whisper server for ad-hoc/manual testing — it does
 not share code with apps/local-api and is not covered by its test suite.
 

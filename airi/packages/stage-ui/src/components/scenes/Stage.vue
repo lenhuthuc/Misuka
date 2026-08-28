@@ -999,7 +999,7 @@ watch(componentState, async (state) => {
   try {
     const controller = new AbortController()
     const tid = setTimeout(() => controller.abort(), 3000)
-    const res = await fetch('http://localhost:8000/v1/audio/voices', { signal: controller.signal })
+    const res = await fetch('http://127.0.0.1:8010/v1/audio/voices', { signal: controller.signal })
     clearTimeout(tid)
 
     if (res.ok) {
@@ -1030,7 +1030,7 @@ watch(componentState, async (state) => {
 
   // Skip auto-configure only when a non-auto provider is already chosen by the user.
   // Allow re-running when provider is openai-compatible-audio-transcription so a stale
-  // port (e.g. 9000 from a previous session) gets corrected to 8000.
+  // port (e.g. 9000 or 8000 from a previous session) gets corrected to 8010.
   if (activeTranscriptionProvider.value === 'browser-web-speech-api')
     return
 
@@ -1043,7 +1043,7 @@ watch(componentState, async (state) => {
   try {
     const controller = new AbortController()
     const tid = setTimeout(() => controller.abort(), 2000)
-    const res = await fetch('http://localhost:8000/health', { signal: controller.signal })
+    const res = await fetch('http://127.0.0.1:8010/health', { signal: controller.signal })
     clearTimeout(tid)
 
     if (res.ok) {
@@ -1051,7 +1051,7 @@ watch(componentState, async (state) => {
       // NOTICE: providersStore.providers is providerCredentials auto-unwrapped by Pinia
       // (setup store refs are unwrapped on the store proxy — no .value needed here).
       providersStore.providers['openai-compatible-audio-transcription'] = {
-        baseUrl: 'http://localhost:8000/v1/',
+        baseUrl: 'http://127.0.0.1:8010/v1/',
         apiKey: 'local',
       }
       providersStore.markProviderAdded('openai-compatible-audio-transcription')

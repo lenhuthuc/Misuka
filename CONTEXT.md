@@ -20,7 +20,7 @@ Mitsuka/
 ├─ tools/
 │  └─ legacy/               # whisper_server.py, test_transcribe.py — not the production entry point
 ├─ apps/
-│  └─ local-api/            # All local services (single FastAPI app, port 8000)
+│  └─ local-api/            # All local services (single FastAPI app, port 8010)
 │     ├─ main.py            # create_app() factory; model/service construction happens in lifespan
 │     ├─ api/                # HTTP routes: chat, vad, emotion_vad, tts, whisper (Sherpa-ONNX-backed)
 │     ├─ application/        # Cross-endpoint policy (prepare_turn: shared by /v1/chat and /v1/chat/stream)
@@ -303,7 +303,7 @@ Schema migrations are additive `ALTER TABLE`s applied in `MemoryService.initiali
 cd apps/local-api
 pip install -r requirements.txt
 # download the Sherpa-ONNX model first — see "Speech-to-text (Sherpa-ONNX)" above
-python main.py   # http://localhost:8000 — Sherpa always runs on CPU/int8;
+python main.py   # http://127.0.0.1:8010 — Sherpa always runs on CPU/int8;
                   # the two VAD models auto-select CUDA if available, else CPU
 ```
 

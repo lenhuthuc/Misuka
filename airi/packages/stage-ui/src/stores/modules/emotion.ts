@@ -22,7 +22,7 @@ const NEUTRAL_EMOTION: EmotionState = { v: 0, a: 0, d: 0 }
  * - You want to read the latest V/A/D scores to drive character expressions
  *
  * Expects:
- * - The local VAD Python service to be running at `baseUrl` (default http://localhost:8000)
+ * - The local VAD Python service to be running at `baseUrl` (default http://127.0.0.1:8010)
  *
  * Returns:
  * - `emotion` – latest V/A/D values (updated after each successful call)
@@ -31,7 +31,7 @@ const NEUTRAL_EMOTION: EmotionState = { v: 0, a: 0, d: 0 }
 export const useEmotionStore = defineStore('modules:emotion', () => {
   const baseUrl = useLocalStorageManualReset<string>(
     'settings/emotion/vad-base-url',
-    'http://localhost:8000',
+    'http://127.0.0.1:8010',
   )
 
   const emotion = ref<EmotionState>({ ...NEUTRAL_EMOTION })

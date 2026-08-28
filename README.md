@@ -13,7 +13,7 @@ The `airi/` directory is based on [moeru-ai/airi](https://github.com/moeru-ai/ai
 ---
 
 ## 🏗️ Architecture
-- **`apps/local-api`**: the single FastAPI app (port 8000, entry point `main.py`) — VAD/emotion
+- **`apps/local-api`**: the single FastAPI app (port 8010, entry point `main.py`) — VAD/emotion
   analysis, Whisper transcription, Piper TTS, and the RAG/LLM "brain" all live here. See
   [CONTEXT.md](CONTEXT.md) for the full architecture (data flow, SSE envelope, logging).
 - **`tools/legacy/whisper_server.py`**: a standalone, legacy Whisper-only server (port 9000,
@@ -21,7 +21,10 @@ The `airi/` directory is based on [moeru-ai/airi](https://github.com/moeru-ai/ai
 - **Model files**: Piper TTS voices live under `assets/models/voices/` (`*.onnx` + `*.onnx.json`,
   tracked in git); the VAD `.pt` checkpoint and downloaded Whisper models live inside
   `apps/local-api/` and are gitignored — see `.gitignore`.
-- `airi/` (the Vue front-end monorepo) discovers `apps/local-api` at `http://localhost:8000` by default.
+- `airi/` (the Vue front-end monorepo) discovers `apps/local-api` at `http://127.0.0.1:8010` by default.
+  Port 8010 and the literal IPv4 address are both deliberate: Docker Desktop publishes container
+  ports on `[::]` too, and Windows resolves `localhost` to `::1` first, so a container on 8000 would
+  silently answer the frontend's health probe instead of local-api. Override with `API_PORT`.
 
 ---
 
@@ -77,7 +80,7 @@ Mitsuka/
   }
   ```
 
-### `apps/local-api` (main FastAPI service, port 8000)
+### `apps/local-api` (main FastAPI service, port 8010)
 - **GET** `/health/live`, `/health/ready`, `/health` (alias of `/health/live`)
 - **POST** `/vad`
   ```http
@@ -118,6 +121,19 @@ See [CONTEXT.md](CONTEXT.md) for request/response shapes, the SSE event envelope
    voices ship under `assets/models/voices/`. Override the defaults via environment variables — see
    `apps/local-api/brain/config.py` for the full list (`WHISPER_MODEL`, `WHISPER_DEVICE`,
    `WHISPER_COMPUTE`, `PIPER_MODELS_DIR`, `OLLAMA_BASE_URL`, `QDRANT_URL`, `LOG_LEVEL`, `LOG_JSON`, ...).
+4. **Build the LLM into Ollama.** The chat model is `mitsuka-ft`, a fine-tune of qwen3:1.7b on this
+   app's spoken-Vietnamese register. Ollama loads it by name from its own registry, so the GGUF under
+   `assets/models/LLM/` has to be imported once before the API will answer a turn:
+   ```bash
+   cd assets/models/LLM
+   ollama create mitsuka-ft -f Modelfile
+   ollama list          # mitsuka-ft should be listed
+   ollama run mitsuka-ft   # optional: chat with it directly
+   ```
+   Re-run the same `create` after changing the `Modelfile` (it overwrites; no need to `ollama rm`
+   first). The `Modelfile` — not `brain/config.py` — is the source of truth for the persona and for
+   `top_p` / `repeat_penalty` / `num_ctx`; see the layout note at the top of
+   `apps/local-api/brain/nodes/generate.py` for why nothing in the Python code repeats the persona.
 
 ---
 
@@ -131,7 +147,7 @@ python tools/legacy/whisper_server.py
 ```bash
 cd apps/local-api
 python main.py
-# defaults to http://0.0.0.0:8000
+# defaults to http://0.0.0.0:8010 — override with API_HOST / API_PORT in .env
 ```
 Both servers support hot‑reload when run with `uvicorn --reload`.
 

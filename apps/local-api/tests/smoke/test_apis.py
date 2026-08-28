@@ -1,6 +1,6 @@
 """
 Test suite cho VAD APIs.
-Chạy server trước: uvicorn main:app --host 0.0.0.0 --port 8000
+Chạy server trước: uvicorn main:app --host 0.0.0.0 --port 8010
 Sau đó chạy: python tests/test_apis.py
 """
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import requests
 
-BASE = "http://localhost:8000"
+BASE = "http://127.0.0.1:8010"
 
 
 def _ok(name: str, resp: requests.Response, expected_keys: list[str] | None = None):

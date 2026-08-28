@@ -118,6 +118,12 @@ export function useVAD(workerUrl: string, options?: UseVADOptions) {
     }
     catch (error) {
       inferenceError.value = errorMessageFromValue(error)
+      // Rethrow. Swallowing this used to make a failed model load completely
+      // invisible: `manager` stayed undefined, `start()` below no-opped, and
+      // the mic pipeline died without a console line, a network request or an
+      // error — the caller's own try/catch was dead code. `inferenceError`
+      // still carries the message for UI that wants to display it.
+      throw error
     }
     finally {
       loading.value = false
@@ -125,8 +131,15 @@ export function useVAD(workerUrl: string, options?: UseVADOptions) {
   }
 
   async function start(stream: MediaStream) {
-    if (manager.value)
-      await manager.value.start(stream)
+    if (!manager.value) {
+      // Reached whenever `init()` never completed. Silence here is what made
+      // the failure untraceable from the outside, so say it plainly.
+      throw new Error(
+        `VAD cannot start: the model never finished loading${inferenceError.value ? ` (${inferenceError.value})` : ''}`,
+      )
+    }
+
+    await manager.value.start(stream)
   }
 
   function dispose() {

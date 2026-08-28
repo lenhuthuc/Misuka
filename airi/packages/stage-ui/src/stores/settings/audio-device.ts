@@ -7,7 +7,7 @@ import { useAudioDevice } from '../../composables/audio'
 let microphonePermissionStatus: PermissionStatus
 
 export const useSettingsAudioDevice = defineStore('settings-audio-devices', () => {
-  const { audioInputs, deviceConstraints, selectedAudioInput: selectedAudioInputNonPersist, startStream, stopStream, stream, askPermission } = useAudioDevice()
+  const { audioInputs, deviceConstraints, selectedAudioInput: selectedAudioInputNonPersist, startStream, stopStream, stream, streamError, askPermission } = useAudioDevice()
 
   const selectedAudioInputPersist = useLocalStorageManualReset<string>('settings/audio/input', selectedAudioInputNonPersist.value)
   const audioInputEnabled = useLocalStorageManualReset<boolean>('settings/audio/input/enabled', false)
@@ -18,7 +18,12 @@ export const useSettingsAudioDevice = defineStore('settings-audio-devices', () =
 
   watch(audioInputEnabled, (val) => {
     if (val) {
-      startStream()
+      // Turning the toggle back off is the honest response to a microphone that
+      // refused to open: leaving it lit told the user they were being listened
+      // to while `stream` stayed undefined and nothing downstream ever ran.
+      void startStream().catch(() => {
+        audioInputEnabled.value = false
+      })
     }
     else {
       stopStream()
@@ -43,7 +48,9 @@ export const useSettingsAudioDevice = defineStore('settings-audio-devices', () =
       && audioInputs.value.some(device => device.deviceId === selectedAudioInputPersist.value)
 
     if (audioInputEnabled.value && hasSelectedInput) {
-      startStream()
+      void startStream().catch(() => {
+        audioInputEnabled.value = false
+      })
     }
     if (selectedAudioInputNonPersist.value && !audioInputEnabled.value) {
       selectedAudioInputPersist.value = selectedAudioInputNonPersist.value
@@ -64,6 +71,7 @@ export const useSettingsAudioDevice = defineStore('settings-audio-devices', () =
     enabled: audioInputEnabled,
 
     stream,
+    streamError,
 
     initialize,
 

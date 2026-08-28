@@ -76,6 +76,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5273,
+    allowedHosts: ['5c72-116-98-255-51.ngrok-free.app'],
     fs: {
       // To mute errors like:
       //   The request id ".../node_modules/@fontsource/sniglet/files/sniglet-latin-400-normal.woff" is outside of Vite serving allow list.

@@ -1,6 +1,6 @@
 """
 Test RAG pipeline ở 2 mức:
-  Level 1 — API  : dùng HTTP (server phải đang chạy tại localhost:8000)
+  Level 1 — API  : dùng HTTP (server phải đang chạy tại 127.0.0.1:8010)
   Level 2 — Unit : khởi tạo service trực tiếp (không cần server, cần Ollama)
 
 Chạy:
@@ -22,7 +22,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-BASE = "http://localhost:8000"
+BASE = "http://127.0.0.1:8010"
 OLLAMA = "http://localhost:11434"
 
 
@@ -217,7 +217,7 @@ async def main(args):
         try:
             run_api_tests()
         except requests.exceptions.ConnectionError:
-            print("  [SKIP] Server not reachable at localhost:8000 — start with: uvicorn main:app")
+            print("  [SKIP] Server not reachable at 127.0.0.1:8010 — start with: uvicorn main:app")
 
     if not args.api_only:
         await run_unit_tests()

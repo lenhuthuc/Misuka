@@ -111,13 +111,18 @@ class FakeLLMService:
         self.generate_calls: list[str] = []
         self.chat_calls: list[tuple[list[dict], dict | None]] = []
         self.stream_chat_calls: list[tuple[list[dict], dict | None]] = []
+        self.chat_think_calls: list[bool] = []
+        self.stream_chat_think_calls: list[bool] = []
+        self.reason_calls: list[tuple[list[dict], int]] = []
 
-    async def chat(self, messages, options=None) -> str:
+    async def chat(self, messages, options=None, *, think: bool = False) -> str:
         self.chat_calls.append((messages, options))
+        self.chat_think_calls.append(think)
         return self.response_text
 
-    async def stream_chat(self, messages, options=None):
+    async def stream_chat(self, messages, options=None, *, think: bool = False):
         self.stream_chat_calls.append((messages, options))
+        self.stream_chat_think_calls.append(think)
         if self.stream_error is not None:
             raise self.stream_error
         for chunk in self.stream_chunks:
@@ -126,6 +131,10 @@ class FakeLLMService:
     async def generate(self, prompt: str) -> str:
         self.generate_calls.append(prompt)
         return self.generate_reply
+
+    async def reason(self, messages, max_tokens: int) -> str:
+        self.reason_calls.append((messages, max_tokens))
+        return "internal analysis and conclusion"
 
     async def aclose(self) -> None:
         pass
@@ -178,6 +187,20 @@ class FakeRAGService:
         return [], self.docs, self.context
 
 
+class FakeWebSearchService:
+    def __init__(self, results: list[dict] | None = None, context: str = "") -> None:
+        self.results = results if results is not None else []
+        self.context = context
+        self.error: Exception | None = None
+        self.query_calls: list[str] = []
+
+    async def build_context(self, query: str):
+        self.query_calls.append(query)
+        if self.error is not None:
+            raise self.error
+        return self.results, self.context
+
+
 class FakeBrainBundle:
     """Everything ServiceContainer.create() would normally build, plus
     handles for assertions. Override fields in a test with e.g.
@@ -201,6 +224,9 @@ class FakeBrainBundle:
         self.memory = FakeMemoryService()
         self.vector = FakeVectorService()
         self.rag = FakeRAGService()
+        self.web_search = FakeWebSearchService()
+        self.web_search_enabled = True
+        self.web_search_knowledge_enabled = True
         self.llm_gate = LLMPriorityGate()
 
     def build_container(self) -> ServiceContainer:
@@ -218,9 +244,19 @@ class FakeBrainBundle:
             memory=self.memory,
             vector=self.vector,
             rag=self.rag,
+            web_search=self.web_search,
+            web_search_enabled=self.web_search_enabled,
+            web_search_knowledge_enabled=self.web_search_knowledge_enabled,
+            knowledge_temperature=0.30,
+            knowledge_max_tokens=480,
             emotion=EmotionService(self.text_vad),
-            memory_recent_limit=10,
+            memory_recent_limit=18,
             memory_recent_char_budget=3000,
+            reasoning_enabled=True,
+            reasoning_activation_threshold=0.50,
+            reasoning_min_tokens=64,
+            reasoning_max_tokens=192,
+            reasoning_token_scale=0.65,
             emotion_executor=ThreadPoolExecutor(max_workers=2),
             tasks=BackgroundTaskRegistry(),
             llm_gate=self.llm_gate,

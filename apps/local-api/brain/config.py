@@ -19,29 +19,37 @@ class Settings(BaseSettings):
     # Decode here is memory-bandwidth-bound, not compute-bound: measured on
     # DDR4-3200, throughput scales inversely with model file size and ignores
     # thread count and context size entirely. qwen2.5:3b ran 6.93 tok/s against
-    # 13.1 tok/s for 1.5b — an exact 2x for an exact 2x in weights. That makes
-    # file size, not parameter count, the thing to shop on: a newer model of
-    # the same size is free.
+    # 13.1 tok/s for 1.5b -- an exact 2x for an exact 2x in weights. That makes
+    # file size, not parameter count, the thing to shop on.
     #
-    # Benchmarked against this app's real system prompt, four spoken turns each
-    # (story, a playful follow-up inside that story, arithmetic, chit-chat):
-    #   qwen2.5:1.5b  degenerates on any turn needing content — announces a
-    #                 story, invents a meta-title, stalls.
-    #   qwen2.5:3b    answered the story turn in *Chinese*. Rule 1 says
-    #                 Vietnamese only; a model that breaks it is not a
-    #                 candidate however fluent the rest is.
-    #   qwen3:4b      2.5GB, and still reasons aloud in English with thinking
-    #                 disabled — spent the whole token ceiling on it in 3 of 4
-    #                 turns and never reached a reply.
-    #   gemma3:4b     best Vietnamese of the four and the warmest in character,
-    #                 but 3.3GB is 2.4x the weights of the pick below.
-    #   qwen3:1.7b    clean Vietnamese in all four, held the 1-3 sentence rule,
-    #                 and played along with the joke turn.
-    # 1.7b wins on being *smaller* than the 3b it replaces (1.4GB vs 1.9GB), so
-    # it is the rare change that is faster and better at once. Being a Qwen3 it
-    # must have thinking off — see `_THINK` in brain/llm_service.py.
-    ollama_model: str = Field(default="qwen3:1.7b")
-    llm_temperature: float = Field(default=0.7)
+    # The stock-model search that picked qwen3:1.7b is over; this is now a
+    # fine-tune of it, and the base comparison is kept only because it is what
+    # justifies the *size*:
+    #   qwen2.5:1.5b  degenerates on any turn needing content.
+    #   qwen2.5:3b    answered a Vietnamese turn in Chinese.
+    #   qwen3:4b      2.5GB, and reasons aloud in English with thinking off.
+    #   gemma3:4b     best Vietnamese of the four, but 3.3GB.
+    #   qwen3:1.7b    clean Vietnamese, held the 1-3 sentence rule.
+    #
+    # `mitsuka-ft` is qwen3:1.7b fine-tuned on this app's own spoken-Vietnamese
+    # register, quantised to Q4_K_M (1.1GB, down from the 1.4GB base). Ollama
+    # loads it by name from its own registry, so import it once before starting:
+    #
+    #     cd assets/models/LLM && ollama create mitsuka-ft -f Modelfile
+    #
+    # The Modelfile is the single source of truth for the persona and for
+    # top_p / repeat_penalty / num_ctx. Nothing in this codebase repeats the
+    # persona -- see the layout rule at the top of brain/nodes/generate.py,
+    # which is what keeps Ollama injecting it. Being a Qwen3 it still reports
+    # the `thinking` capability. Chat turns select it adaptively from context
+    # confidence; non-chat background generation keeps it disabled.
+    ollama_model: str = Field(default="mitsuka-ft")
+    # Ollama request options override Modelfile PARAMETERs, so a mismatch here
+    # silently wins over `PARAMETER temperature 0.65` in the Modelfile and the
+    # fine-tune runs hotter than it was tuned at. Kept equal on purpose; the
+    # knobs this file does *not* send (top_p, repeat_penalty, num_ctx) fall
+    # through to the Modelfile untouched, which is where they belong.
+    llm_temperature: float = Field(default=0.65)
     # A spoken turn that runs past a few sentences costs twice: once to decode
     # now and again on every later turn, since the reply is re-sent inside the
     # history window. 1024 allowed 2,900-character answers that pushed prompts
@@ -92,21 +100,98 @@ class Settings(BaseSettings):
     # Ceiling on retrieved context, in characters. Prefill is linear in prompt
     # length and dominates time-to-first-token on a CPU runner, so retrieval
     # recall is traded against latency here rather than left unbounded.
-    rag_context_char_budget: int = Field(default=2000)
+    # The two variable context budgets total 5,000 characters by default:
+    # 1,500 for retrieval (30%) and 3,500 for recent chat (70%). This makes
+    # nearby conversational context the primary source of continuity.
+    rag_context_char_budget: int = Field(default=1500)
     # Cosine floor a hit must clear to reach the prompt. Qdrant always returns
     # its `top_k` nearest points, however far away they are, so an unrelated
     # question still retrieved five memories and spent ~900 characters of
     # prefill on them. Fusion ranks hits against each other and cannot tell
     # "best of a bad lot" from "relevant", so the floor has to be applied to
     # the raw similarity, before RRF. 0.0 disables it.
-    rag_min_score: float = Field(default=0.35)
+    # 0.50 is deliberately conservative: RAG is optional background and an
+    # unrelated memory is more harmful than omitting a weakly related one.
+    rag_min_score: float = Field(default=0.50)
+
+    # ── Adaptive reasoning ──────────────────────────────────────────────────
+    # Thinking is considered only for substantive turns where RAG was eligible.
+    # The strongest signal from long-term RAG, indexed recent history, and the
+    # verbatim history window is compared with this threshold.
+    reasoning_enabled: bool = Field(default=True)
+    reasoning_activation_threshold: float = Field(default=0.50)
+    # The fine-tuned chat model reports a thinking capability but does not emit
+    # a thinking trace in practice, so a stock Qwen3 performs the optional
+    # hidden deliberation pass and Mitsuka still owns the final spoken answer.
+    reasoning_model: str = Field(default="qwen3:1.7b")
+    # Hard num_predict bounds for that separate pass. A normalized -log curve
+    # maps zero confidence to the maximum and decays toward the minimum as the
+    # score approaches the threshold; fractional tokens round down.
+    reasoning_min_tokens: int = Field(default=64)
+    reasoning_max_tokens: int = Field(default=192)
+    # Applied after the -log curve and before floor. 0.65 cuts deliberation by
+    # roughly 35% while retaining the same confidence-dependent shape.
+    reasoning_token_scale: float = Field(default=0.65)
+
+    # ── Web search (DuckDuckGo, via `ddgs`) ─────────────────────────────────
+    # Fallback for live information neither the frozen local weights nor
+    # personal-conversation RAG can have: today's weather, breaking news,
+    # current prices. Gated by `decide_web_search` (see
+    # brain/nodes/should_search_web.py) so it only fires for the two narrow
+    # classes that gate names, not every turn.
+    web_search_enabled: bool = Field(default=True)
+    # No API key needed -- DDGS scrapes DuckDuckGo directly, in keeping with
+    # everything else in this app running local/free rather than against a
+    # paid third-party API.
+    web_search_max_results: int = Field(default=3)
+    # Same reasoning as rag_context_char_budget: prefill is linear in prompt
+    # length, so retrieved web snippets are capped rather than sent whole.
+    web_search_context_char_budget: int = Field(default=800)
+    # DDGS does its own blocking HTTP under the hood; this bounds how long a
+    # turn will wait on it before degrading to no web context, same as any
+    # other best-effort enrichment in this pipeline.
+    web_search_timeout_seconds: float = Field(default=6.0)
+    # Biases DuckDuckGo's results toward Vietnamese sources, matching the
+    # fine-tune's spoken register. "wt-wt" (DDGS's own default) removes the bias.
+    web_search_region: str = Field(default="vn-vi")
+    # The third query class, separately switchable because it is the only one
+    # that can fire on a turn with no time-sensitive marker in it at all: an
+    # ordinary open-world question ("tôm biển là con gì"). Neither the frozen
+    # 1.1GB weights nor conversation RAG can answer those, and unanswered they
+    # do not come back as "mình không biết" -- they come back as invented
+    # detail delivered in the same warm, confident register as everything else.
+    # Turning this off restores the previous behaviour exactly: live info and
+    # shopping questions still search, knowledge questions go ungrounded.
+    web_search_knowledge_enabled: bool = Field(default=True)
+
+    # ── Knowledge-turn decoding ─────────────────────────────────────────────
+    # A grounded factual turn is decoded differently from a chat turn. The
+    # conversational 0.65 (with the Modelfile's top_p 0.9) is what makes the
+    # same question sample different details on different turns -- fine when
+    # the content is rapport, wrong when it is a claim about the world. This is
+    # applied by brain.response_policy and composes with the VAD policy by
+    # taking whichever asks for the colder, shorter answer.
+    knowledge_temperature: float = Field(default=0.30)
+    # Deliberately above `llm_max_tokens`: the 320 ceiling is a spoken-latency
+    # budget for chat, and a knowledge turn is the one case where the answer is
+    # the point. Paired with the 3-5 sentence override in nodes/generate.py --
+    # raising this alone would not lengthen anything, since the binding limit
+    # is the fine-tune's own "1-3 câu" rule, not num_predict.
+    knowledge_max_tokens: int = Field(default=480)
 
     # ── Memory ───────────────────────────────────────────────────────────────
-    memory_recent_limit: int = Field(default=10)
+    # SQLite rows are individual messages, so 18 rows represent approximately
+    # nine user/assistant exchanges. These are checked before RAG is attempted.
+    memory_recent_limit: int = Field(default=18)
     # Ceiling on the verbatim history window, in characters. The message count
     # above bounds how many turns are considered; this bounds how much prompt
     # they are allowed to occupy, which is what prefill latency actually tracks.
-    memory_recent_char_budget: int = Field(default=3000)
+    memory_recent_char_budget: int = Field(default=3500)
+    # Persistent sparse sentence index used to suppress assistant phrasing that
+    # closely repeats prior replies. Scores are normalized BM25 similarities.
+    bm25_repetition_threshold: float = Field(default=0.78)
+    bm25_repetition_min_tokens: int = Field(default=5)
+    bm25_repetition_max_sentences: int = Field(default=2000)
 
     # ── Logging ──────────────────────────────────────────────────────────────
     log_level: str = Field(default="INFO")
@@ -165,6 +250,16 @@ class Settings(BaseSettings):
     # start, low at the end, over and over. Raise it only if replies go back to
     # being synthesised whole.
     tts_contour_depth: float = Field(default=0.0, ge=0.0, le=2.0)
+
+    # ── HTTP server ──────────────────────────────────────────────────────────
+    # 8010, not the conventional 8000: Docker Desktop publishes container ports
+    # on both `0.0.0.0` and `[::]`, and a stack holding 8000 there takes over
+    # `localhost:8000` for everything else on the machine — Windows resolves
+    # `localhost` to `::1` first, and uvicorn's `0.0.0.0` is IPv4-only, so the
+    # frontend's probe reached the container and saw the API as offline while
+    # it was serving fine on `127.0.0.1:8000`.
+    api_host: str = Field(default="0.0.0.0")  # noqa: S104 — loopback + LAN, local dev service
+    api_port: int = Field(default=8010, ge=1, le=65535)
 
     # ── CORS ─────────────────────────────────────────────────────────────────
     cors_allow_origins: list[str] = Field(default=["*"])

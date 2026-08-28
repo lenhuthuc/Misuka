@@ -21,7 +21,7 @@ let stopRequested = false
 
 function getBaseURL(): string {
   const config = providersStore.getProviderConfig(providerId) as Record<string, unknown>
-  return ((config?.baseUrl as string) || 'http://localhost:8000/v1').replace(/\/$/, '')
+  return ((config?.baseUrl as string) || 'http://127.0.0.1:8010/v1').replace(/\/$/, '')
 }
 
 async function togglePlayback() {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from brain.state import RetrievedDoc
@@ -10,6 +11,14 @@ if TYPE_CHECKING:
     from brain.vector_service import VectorService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RetrievalEvidence:
+    """Best raw cosine scores on either side of the recent-history boundary."""
+
+    rag_score: float = 0.0
+    history_score: float = 0.0
 
 
 class RAGService:
@@ -60,6 +69,16 @@ class RAGService:
         query: str,
         covered_since: str | None = None,
     ) -> tuple[list[str], list[RetrievedDoc], str]:
+        queries, docs, context, _evidence = await self.build_context_with_evidence(
+            query, covered_since=covered_since,
+        )
+        return queries, docs, context
+
+    async def build_context_with_evidence(
+        self,
+        query: str,
+        covered_since: str | None = None,
+    ) -> tuple[list[str], list[RetrievedDoc], str, RetrievalEvidence]:
         """Retrieve long-term context for a turn.
 
         Use when: building the system prompt for a chat turn that will also
@@ -73,15 +92,42 @@ class RAGService:
         15k characters and time-to-first-token from 11s to 44s.
 
         Returns: the queries issued, the docs that survived filtering and the
-        character budget, and those docs formatted as prompt context.
+        character budget, those docs formatted as prompt context, and raw
+        relevance evidence for the adaptive-reasoning policy.
         """
-        queries, docs = await self.retrieve(query)
+        raw_results = await self._vector.search_batch([query], top_k=self._top_k)
+        evidence = self._score_evidence(raw_results, covered_since)
+        raw_hits = sum(len(results) for results in raw_results)
+        filtered_results = [self._above_floor(results) for results in raw_results]
+        kept_hits = sum(len(results) for results in filtered_results)
+        docs = self._reciprocal_rank_fusion(filtered_results)
+        logger.info(
+            "RAG | raw_hits=%d above_floor=%d after_rrf=%d rag_score=%.3f history_score=%.3f",
+            raw_hits, kept_hits, len(docs), evidence.rag_score, evidence.history_score,
+        )
 
         if covered_since is not None:
             docs = [d for d in docs if not self._already_in_history(d, covered_since)]
 
         docs = self._fit_budget(docs)
-        return queries, docs, self._format_context(docs)
+        return [query], docs, self._format_context(docs), evidence
+
+    @staticmethod
+    def _score_evidence(
+        all_results: list[list],
+        covered_since: str | None,
+    ) -> RetrievalEvidence:
+        rag_score = 0.0
+        history_score = 0.0
+        for results in all_results:
+            for hit in results:
+                score = float(getattr(hit, "score", 0.0) or 0.0)
+                timestamp = (getattr(hit, "payload", None) or {}).get("timestamp")
+                if covered_since is not None and timestamp and timestamp >= covered_since:
+                    history_score = max(history_score, score)
+                else:
+                    rag_score = max(rag_score, score)
+        return RetrievalEvidence(rag_score=rag_score, history_score=history_score)
 
     @staticmethod
     def _already_in_history(doc: RetrievedDoc, covered_since: str) -> bool:
@@ -142,7 +188,10 @@ class RAGService:
     @staticmethod
     def _format_context(docs: list[RetrievedDoc]) -> str:
         if not docs:
-            return "No relevant documents found."
+            # Empty retrieval must stay genuinely absent from the prompt. A
+            # status sentence here still creates a RAG system note and gives
+            # the model something irrelevant to attend to.
+            return ""
         lines = []
         for i, d in enumerate(docs):
             # Expose the stored emotion label so the agent consumes it directly

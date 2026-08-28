@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from brain.memory_service import MemoryService
     from brain.rag_service import RAGService
     from brain.vector_service import VectorService
+    from brain.web_search_service import WebSearchService
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,19 @@ class ServiceContainer:
     memory: "MemoryService"
     vector: "VectorService"
     rag: "RAGService"
+    web_search: "WebSearchService"
+    web_search_enabled: bool
+    web_search_knowledge_enabled: bool
+    knowledge_temperature: float
+    knowledge_max_tokens: int
     emotion: EmotionService
     memory_recent_limit: int
     memory_recent_char_budget: int
+    reasoning_enabled: bool
+    reasoning_activation_threshold: float
+    reasoning_min_tokens: int
+    reasoning_max_tokens: int
+    reasoning_token_scale: float
     emotion_executor: ThreadPoolExecutor
     tasks: BackgroundTaskRegistry
     llm_gate: LLMPriorityGate
@@ -65,6 +76,7 @@ class ServiceContainer:
         from brain.memory_service import MemoryService
         from brain.rag_service import RAGService
         from brain.vector_service import VectorService
+        from brain.web_search_service import WebSearchService
 
         text_vad_model, text_vad_tokenizer = load_text_vad(str(settings.resolved_text_vad_checkpoint_path))
         text_vad = TextVADService(text_vad_model, text_vad_tokenizer)
@@ -91,9 +103,15 @@ class ServiceContainer:
             model=settings.ollama_model,
             temperature=settings.llm_temperature,
             max_tokens=settings.llm_max_tokens,
+            reasoning_model=settings.reasoning_model,
         )
 
-        memory = MemoryService(settings.sqlite_path)
+        memory = MemoryService(
+            settings.sqlite_path,
+            bm25_repetition_threshold=settings.bm25_repetition_threshold,
+            bm25_repetition_min_tokens=settings.bm25_repetition_min_tokens,
+            bm25_repetition_max_sentences=settings.bm25_repetition_max_sentences,
+        )
         await memory.initialize()
 
         vector = VectorService(
@@ -110,6 +128,12 @@ class ServiceContainer:
             top_k=settings.qdrant_top_k,
             context_char_budget=settings.rag_context_char_budget,
             min_score=settings.rag_min_score,
+        )
+        web_search = WebSearchService(
+            max_results=settings.web_search_max_results,
+            context_char_budget=settings.web_search_context_char_budget,
+            timeout_seconds=settings.web_search_timeout_seconds,
+            region=settings.web_search_region,
         )
         emotion = EmotionService(text_vad)
 
@@ -130,9 +154,19 @@ class ServiceContainer:
             memory=memory,
             vector=vector,
             rag=rag,
+            web_search=web_search,
+            web_search_enabled=settings.web_search_enabled,
+            web_search_knowledge_enabled=settings.web_search_knowledge_enabled,
+            knowledge_temperature=settings.knowledge_temperature,
+            knowledge_max_tokens=settings.knowledge_max_tokens,
             emotion=emotion,
             memory_recent_limit=settings.memory_recent_limit,
             memory_recent_char_budget=settings.memory_recent_char_budget,
+            reasoning_enabled=settings.reasoning_enabled,
+            reasoning_activation_threshold=settings.reasoning_activation_threshold,
+            reasoning_min_tokens=settings.reasoning_min_tokens,
+            reasoning_max_tokens=settings.reasoning_max_tokens,
+            reasoning_token_scale=settings.reasoning_token_scale,
             emotion_executor=ThreadPoolExecutor(max_workers=settings.emotion_executor_max_workers),
             tasks=BackgroundTaskRegistry(),
             llm_gate=llm_gate,

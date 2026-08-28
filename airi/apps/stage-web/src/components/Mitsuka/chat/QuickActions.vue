@@ -1,0 +1,67 @@
+<script setup lang="ts">
+export interface QuickAction {
+  id: string
+  emoji: string
+  label: string
+  /** Sent verbatim as the user's message when the chip is picked. */
+  prompt: string
+}
+
+defineProps<{ actions: QuickAction[], disabled?: boolean }>()
+
+defineEmits<{ (e: 'pick', action: QuickAction): void }>()
+</script>
+
+<template>
+  <div class="quick-actions">
+    <button
+      v-for="action in actions"
+      :key="action.id"
+      class="quick-chip"
+      type="button"
+      :disabled="disabled"
+      @click="$emit('pick', action)"
+    >
+      <span aria-hidden="true">{{ action.emoji }}</span>
+      {{ action.label }}
+    </button>
+  </div>
+</template>
+
+<style scoped>
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 0 0.95rem 0.6rem;
+  gap: 0.4rem;
+}
+
+.quick-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--mk-border);
+  border-radius: 999px;
+  background: var(--mk-raise);
+  color: var(--mk-ink-dim);
+  cursor: pointer;
+  padding: 0.34rem 0.7rem;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  gap: 0.32rem;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+
+.quick-chip:hover:not(:disabled) {
+  border-color: rgb(255 121 193 / 0.34);
+  background: rgb(255 111 181 / 0.14);
+  transform: translateY(-1px);
+}
+
+.quick-chip:disabled { cursor: default; opacity: 0.4; }
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-chip { transition: none; }
+  .quick-chip:hover:not(:disabled) { transform: none; }
+}
+</style>

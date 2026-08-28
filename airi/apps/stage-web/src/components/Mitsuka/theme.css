@@ -1,0 +1,111 @@
+/**
+ * Mitsuka UI design tokens.
+ *
+ * Scoped to `.mitsuka-app` rather than `:root` so the rest of airi's pages
+ * (settings, devtools, the upstream stage) keep their own theme untouched —
+ * this file is only loaded by the Mitsuka shell.
+ */
+.mitsuka-app {
+  --mk-bg: #0b0710;
+  --mk-bg-2: #140d1e;
+  --mk-panel: rgb(24 17 34 / 0.72);
+  --mk-panel-2: rgb(31 22 44 / 0.58);
+  --mk-panel-solid: #17101f;
+  --mk-border: rgb(255 255 255 / 0.07);
+  --mk-border-strong: rgb(255 255 255 / 0.14);
+  --mk-ink: #f7f0fb;
+  --mk-ink-dim: #d9cbe6;
+  --mk-muted: #a08fb2;
+  --mk-pink: #ff79c1;
+  --mk-pink-soft: #ffb4dc;
+  --mk-purple: #ab7dff;
+  --mk-purple-soft: #cfb2ff;
+  --mk-online: #6ee7a8;
+  --mk-danger: #ff8fa3;
+  --mk-accent: linear-gradient(135deg, #b57cff 0%, #ff6fb5 100%);
+
+  /* Surfaces that sit *inside* a panel. Every component reads these instead of
+     hard-coding an rgba, so the light palette below only has to restate the
+     tokens rather than every rule that uses them. */
+  --mk-raise: rgb(255 255 255 / 0.05);
+  --mk-hover: rgb(171 125 255 / 0.18);
+  --mk-float: rgb(24 16 35 / 0.98);
+  --mk-inset: rgb(20 13 30 / 0.62);
+  --mk-hud: rgb(14 8 24 / 0.62);
+  --mk-modal: linear-gradient(160deg, rgb(36 25 51 / 0.96), rgb(20 13 30 / 0.96));
+  --mk-bubble-ai: linear-gradient(140deg, rgb(255 111 181 / 0.14), rgb(171 125 255 / 0.08)), rgb(30 20 42 / 0.72);
+  --mk-bubble-user: linear-gradient(140deg, rgb(171 125 255 / 0.26), rgb(126 88 214 / 0.2)), rgb(28 20 44 / 0.72);
+  --mk-logo-gradient: linear-gradient(100deg, #ffb4dc, #d7b6ff 55%, #ffa1d3);
+  --mk-radius-lg: 22px;
+  --mk-radius: 16px;
+  --mk-radius-sm: 11px;
+  --mk-shadow: 0 24px 60px rgb(5 2 12 / 0.55);
+  --mk-glow-pink: 0 0 24px rgb(255 111 181 / 0.28);
+
+  color: var(--mk-ink);
+  font-family: Nunito, ui-rounded, system-ui, sans-serif;
+}
+
+/* The mockup is a dark design. Light mode keeps the same structure with a
+   parchment-leaning surface so the app is still usable when the OS/theme
+   toggle is set to light. */
+.mitsuka-app.mitsuka-app--light {
+  --mk-bg: #f6f1fa;
+  --mk-bg-2: #ece3f5;
+  --mk-panel: rgb(255 255 255 / 0.82);
+  --mk-panel-2: rgb(255 255 255 / 0.62);
+  --mk-panel-solid: #ffffff;
+  --mk-border: rgb(24 10 40 / 0.08);
+  --mk-border-strong: rgb(24 10 40 / 0.16);
+  --mk-ink: #241534;
+  --mk-ink-dim: #4a3660;
+  --mk-muted: #7c6a8e;
+  --mk-shadow: 0 20px 48px rgb(90 60 130 / 0.16);
+
+  /* The accent pinks/purples of the dark design are near-white on a light
+     ground, so light mode darkens them rather than reusing them. */
+  --mk-pink: #d94b96;
+  --mk-pink-soft: #b93a7d;
+  --mk-purple: #7c4fd4;
+  --mk-purple-soft: #6438bb;
+
+  --mk-raise: rgb(40 22 60 / 0.05);
+  --mk-hover: rgb(171 125 255 / 0.16);
+  --mk-float: rgb(255 255 255 / 0.99);
+  --mk-inset: rgb(255 255 255 / 0.78);
+  --mk-hud: rgb(255 255 255 / 0.82);
+  --mk-modal: linear-gradient(160deg, rgb(255 255 255 / 0.98), rgb(246 241 250 / 0.98));
+  --mk-bubble-ai: linear-gradient(140deg, rgb(255 111 181 / 0.16), rgb(171 125 255 / 0.1)), rgb(255 255 255 / 0.9);
+  --mk-bubble-user: linear-gradient(140deg, rgb(171 125 255 / 0.24), rgb(126 88 214 / 0.14)), rgb(255 255 255 / 0.9);
+  --mk-logo-gradient: linear-gradient(100deg, #d94b96, #7c4fd4 55%, #d94b96);
+}
+
+/*
+ * UnoCSS's presetIcons rule gives an `i-*` span an em-sized box but leaves
+ * `display` alone, relying on the parent to blockify it. That holds inside the
+ * flex/grid rows most icons live in, but an icon in a plain parent stays
+ * `display: inline`, where width/height do not apply and it renders as
+ * nothing. Blockify them inside the Mitsuka shell so placement never decides
+ * whether an icon is visible.
+ */
+.mitsuka-app [class*='i-solar'],
+.mitsuka-app [class*='i-svg-spinners'] {
+  display: inline-block;
+}
+
+.mitsuka-app .mk-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(171 125 255 / 0.35) transparent;
+}
+.mitsuka-app .mk-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.mitsuka-app .mk-scroll::-webkit-scrollbar-thumb { border-radius: 999px; background: rgb(171 125 255 / 0.32); }
+.mitsuka-app .mk-scroll::-webkit-scrollbar-track { background: transparent; }
+
+.mitsuka-app .mk-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}

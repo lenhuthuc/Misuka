@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { OnboardingDialog, OnboardingStepAnalyticsNotice, ToasterRoot } from '@proj-airi/stage-ui/components'
+import { ToasterRoot } from '@proj-airi/stage-ui/components'
 import { useInferencePreload } from '@proj-airi/stage-ui/composables'
-import { isPosthogAvailableInBuild, useSharedAnalyticsStore } from '@proj-airi/stage-ui/stores/analytics'
+import { useSharedAnalyticsStore } from '@proj-airi/stage-ui/stores/analytics'
 import { useCharacterOrchestratorStore } from '@proj-airi/stage-ui/stores/character'
 import { useChatSessionStore } from '@proj-airi/stage-ui/stores/chat/session-store'
 import { useDisplayModelsStore } from '@proj-airi/stage-ui/stores/display-models'
@@ -19,6 +19,7 @@ import { RouterView } from 'vue-router'
 import { toast, Toaster } from 'vue-sonner'
 
 import PerformanceOverlay from './components/Devtools/PerformanceOverlay.vue'
+import MitsukaWelcome from './components/Mitsuka/onboarding/WelcomeScreen.vue'
 
 import { usePWAStore } from './stores/pwa'
 
@@ -62,12 +63,6 @@ const colors = computed(() => {
   return [primaryColor.value, secondaryColor.value, tertiaryColor.value, isDark.value ? '#121212' : '#FFFFFF']
 })
 
-const onboardingExtraSteps = computed(() => {
-  return isPosthogAvailableInBuild()
-    ? [{ id: 'analytics-notice', component: OnboardingStepAnalyticsNotice }]
-    : []
-})
-
 watch(settings.language, () => {
   i18n.locale.value = settings.language.value
 })
@@ -107,13 +102,10 @@ onUnmounted(() => {
   contextBridgeStore.dispose()
 })
 
-// Handle first-time setup events
+// Dismissing the Mitsuka welcome is the whole of first-time setup: there is no
+// provider or model to pick, so the screen is never "skipped", only completed.
 function handleSetupConfigured() {
   onboardingStore.markSetupCompleted()
-}
-
-function handleSetupSkipped() {
-  onboardingStore.markSetupSkipped()
 }
 </script>
 
@@ -141,13 +133,9 @@ function handleSetupSkipped() {
     <Toaster />
   </ToasterRoot>
 
-  <!-- First Time Setup Dialog -->
-  <OnboardingDialog
-    v-model="showingSetup"
-    :extra-steps="onboardingExtraSteps"
-    @configured="handleSetupConfigured"
-    @skipped="handleSetupSkipped"
-  />
+  <!-- First-run welcome. Replaces airi's onboarding dialog (sign-in → provider →
+       API key → model), none of which applies to a local-api-backed Mitsuka. -->
+  <MitsukaWelcome v-model="showingSetup" @start="handleSetupConfigured" />
 
   <PerformanceOverlay />
 </template>

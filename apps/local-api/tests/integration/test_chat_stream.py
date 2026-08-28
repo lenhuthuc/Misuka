@@ -33,7 +33,7 @@ async def test_chat_stream_success_yields_deltas_emotion_then_done(client, fake_
     assert len(turn_ids) == 1
 
     deltas = [e for e in events if e["type"] == "delta"]
-    assert [e["content"] for e in deltas] == ["Xin ", "chao"]
+    assert [e["content"] for e in deltas] == ["Xin chao"]
 
     emotion_events = [e for e in events if e["type"] == "emotion"]
     assert len(emotion_events) == 1
@@ -41,6 +41,20 @@ async def test_chat_stream_success_yields_deltas_emotion_then_done(client, fake_
     assert set(emotion_events[0]["state"].keys()) == {"valence", "arousal", "dominance"}
 
     assert events[-1]["type"] == "done"
+
+
+async def test_chat_stream_drops_repeated_sentence_before_emitting(client, fake_brain_bundle):
+    fake_brain_bundle.llm.stream_chunks = ["Câu hỏi cũ bị lặp lại.", " Câu mới được giữ."]
+    fake_brain_bundle.memory.filter_assistant_response = (
+        lambda text, fallback="": "" if "cũ bị lặp" in text else text.strip()
+    )
+
+    resp = await client.post("/v1/chat/stream", json={"query": "hôm nay bình thường"})
+    events = _parse_sse(resp.text)
+
+    assert [event["content"] for event in events if event["type"] == "delta"] == [
+        "Câu mới được giữ."
+    ]
 
 
 async def test_chat_stream_llm_failure_mid_stream_yields_typed_error_event(client, fake_brain_bundle):
@@ -79,4 +93,7 @@ async def test_chat_stream_vad_uses_fast_short_generation_policy(client, fake_br
     assert resp.status_code == 200
     messages, options = fake_brain_bundle.llm.stream_chat_calls[-1]
     assert options == {"temperature": 0.55, "num_predict": 256}
-    assert "Response style: brief" in messages[0]["content"]
+    # The first-turn VAD note is intentionally dropped so it cannot replace the
+    # persona injected by the Modelfile; its fast token/temperature controls
+    # still apply to the stream.
+    assert messages == [{"role": "user", "content": "toi dang roi"}]
