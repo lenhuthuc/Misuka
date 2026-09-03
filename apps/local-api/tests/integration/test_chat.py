@@ -191,3 +191,69 @@ async def test_seed_endpoint_inserts_docs(client, fake_brain_bundle):
     resp = await client.post("/v1/chat/seed")
     assert resp.status_code == 200
     assert resp.json()["inserted"] == len(fake_brain_bundle.vector.upserted[0][0])
+
+
+async def test_chat_regenerates_once_when_the_whole_reply_is_a_repetition(client, fake_brain_bundle):
+    """The case BM25 exists for. Emitting the raw text here handed the user
+    back the very sentence the filter had just caught."""
+    fake_brain_bundle.llm.response_text = "Bạn muốn nghe chuyện khác hay tìm chủ đề mới?"
+    fake_brain_bundle.memory.messages.extend([
+        {"role": "user", "content": "kể chuyện gì đi", "vad": None, "emotion": None,
+         "timestamp": "2026-09-02T13:00:00+00:00"},
+        {"role": "assistant", "content": "Bạn muốn nghe chuyện khác hay tìm chủ đề mới?",
+         "vad": None, "emotion": None, "timestamp": "2026-09-02T13:00:01+00:00"},
+    ])
+
+    calls: list[list[dict]] = []
+
+    async def chat(messages, options=None, *, think: bool = False):
+        calls.append(messages)
+        # First pass repeats; the retry, having been told so, writes something new.
+        return "Câu trả lời mới, không lặp." if len(calls) > 1 else fake_brain_bundle.llm.response_text
+
+    fake_brain_bundle.llm.chat = chat
+    fake_brain_bundle.memory.filter_assistant_response = (
+        lambda text, fallback="": "" if "chủ đề mới" in text else text
+    )
+
+    resp = await client.post("/v1/chat", json={"query": "chủ đề mới để kể"})
+
+    assert resp.status_code == 200
+    assert resp.json()["response"] == "Câu trả lời mới, không lặp."
+    assert len(calls) == 2
+    # The retry has to say *why*, and land where the note is read -- never at
+    # index 0, which would silently replace the Modelfile persona.
+    assert calls[1][0]["role"] != "system"
+    assert "lặp lại" in calls[1][-2]["content"]
+    assert calls[1][-1]["role"] == "user"
+
+
+async def test_chat_keeps_the_raw_reply_when_the_retry_repeats_too(client, fake_brain_bundle):
+    """Last resort stays the model's own words: a fixed canned phrase would
+    join the BM25 corpus and start colliding with future turns."""
+    repeated = "Bạn muốn nghe chuyện khác hay tìm chủ đề mới?"
+    fake_brain_bundle.llm.response_text = repeated
+    fake_brain_bundle.memory.filter_assistant_response = lambda text, fallback="": ""
+
+    resp = await client.post("/v1/chat", json={"query": "chủ đề mới để kể"})
+
+    assert resp.status_code == 200
+    assert resp.json()["response"] == repeated
+
+
+async def test_chat_does_not_regenerate_when_some_sentences_survive(client, fake_brain_bundle):
+    calls: list[list[dict]] = []
+
+    async def chat(messages, options=None, *, think: bool = False):
+        calls.append(messages)
+        return "Câu cũ bị lặp. Câu mới được giữ."
+
+    fake_brain_bundle.llm.chat = chat
+    fake_brain_bundle.memory.filter_assistant_response = (
+        lambda text, fallback="": text.replace("Câu cũ bị lặp. ", "") or fallback
+    )
+
+    resp = await client.post("/v1/chat", json={"query": "hôm nay bình thường"})
+
+    assert resp.json()["response"] == "Câu mới được giữ."
+    assert len(calls) == 1

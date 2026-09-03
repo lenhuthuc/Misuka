@@ -13,6 +13,7 @@ apps/local-api/venv/
 
 # Downloaded / cached model weights (reproducible, not source)
 apps/local-api/models/
+assets/models/vision/
 
 # Oversized model checkpoints (exceed GitHub's 100MB limit)
 ModelPreVoice/model.safetensors

@@ -119,3 +119,33 @@ def test_a_query_with_its_own_topic_never_inherits():
 
     assert decision.kind == "live"
     assert decision.inherited is False
+
+
+def test_asking_what_is_trending_is_a_live_query():
+    """"What is everyone talking about right now" is as live as a gold price,
+    and was the one live class with no keyword: the observed failure was the
+    assistant answering a question about *today* from frozen weights, then
+    looping back to ask the user to pick a topic instead."""
+    assert should_use_web_search("chủ đề nóng nhất bây giờ là gì") is True
+    assert should_use_web_search("có tin nóng gì không") is True
+    assert should_use_web_search("cái gì đang hot vậy") is True
+    # Still narrow: a topic-free chat turn names nothing to search for.
+    assert should_use_web_search("hôm nay bạn thế nào") is False
+
+
+def test_a_delegation_clause_is_stripped_off_the_search_query():
+    """The topic is what follows the comma. Searching the whole utterance ranks
+    pages containing that phrasing instead of pages about the subject."""
+    assert to_search_query("bạn cứ chọn đi, chủ đề nóng nhất mà chọn") == "chủ đề nóng nhất"
+    # Only a delegation prefix goes; an ordinary clause is part of the topic.
+    assert to_search_query("hôm nay, thời tiết thế nào") == "hôm nay, thời tiết"
+    # Nothing left after the clause means there was no topic to isolate.
+    assert to_search_query("bạn cứ chọn đi") == "bạn cứ chọn"
+
+
+def test_the_trending_turn_from_the_observed_loop_now_searches():
+    decision = decide_web_search("bạn cứ chọn đi, chủ đề nóng nhất mà chọn")
+
+    assert decision.should_search is True
+    assert decision.kind == "live"
+    assert decision.query == "chủ đề nóng nhất"

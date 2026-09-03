@@ -31,6 +31,20 @@ class ResponsePolicy:
             "num_predict": self.max_tokens if self.max_tokens is not None else default_max_tokens,
         }
 
+    def for_grounded_web(self, temperature: float) -> "ResponsePolicy":
+        """Colder decoding for a turn holding live search results.
+
+        The temperature half of `for_grounded_knowledge` without the length
+        half. A live query ("giá vàng hôm nay", "chủ đề gì đang hot") has real
+        snippets in front of it and needs the same consistency, but its answer
+        is a fact or two -- expanding it to the knowledge budget would pad, and
+        padding next to real notes is where invention starts.
+        """
+        return replace(
+            self,
+            temperature=temperature if self.temperature is None else min(self.temperature, temperature),
+        )
+
     def for_grounded_knowledge(self, temperature: float, max_tokens: int) -> "ResponsePolicy":
         """Retune decoding for a turn that retrieved real material to answer from.
 
@@ -52,8 +66,7 @@ class ResponsePolicy:
         cap exists for their sake and not for the answer's.
         """
         return replace(
-            self,
-            temperature=temperature if self.temperature is None else min(self.temperature, temperature),
+            self.for_grounded_web(temperature),
             max_tokens=max_tokens if self.max_tokens is None else min(self.max_tokens, max_tokens),
         )
 

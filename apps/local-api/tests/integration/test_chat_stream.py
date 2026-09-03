@@ -97,3 +97,37 @@ async def test_chat_stream_vad_uses_fast_short_generation_policy(client, fake_br
     # persona injected by the Modelfile; its fast token/temperature controls
     # still apply to the stream.
     assert messages == [{"role": "user", "content": "toi dang roi"}]
+
+
+async def test_chat_stream_regenerates_once_when_every_sentence_is_repeated(client, fake_brain_bundle):
+    """Nothing has reached the client yet, so the turn can still be rewritten
+    rather than emitting the repetition the filter just caught."""
+    fake_brain_bundle.llm.stream_chunks = ["Bạn muốn nghe chuyện khác hay tìm chủ đề mới?"]
+    fake_brain_bundle.llm.response_text = "Câu trả lời mới, không lặp."
+    fake_brain_bundle.memory.messages.extend([
+        {"role": "user", "content": "kể chuyện gì đi", "vad": None, "emotion": None,
+         "timestamp": "2026-09-02T13:00:00+00:00"},
+        {"role": "assistant", "content": "Bạn muốn nghe chuyện khác hay tìm chủ đề mới?",
+         "vad": None, "emotion": None, "timestamp": "2026-09-02T13:00:01+00:00"},
+    ])
+    fake_brain_bundle.memory.filter_assistant_response = (
+        lambda text, fallback="": "" if "chủ đề mới" in text else text.strip()
+    )
+
+    resp = await client.post("/v1/chat/stream", json={"query": "chủ đề mới để kể"})
+    events = _parse_sse(resp.text)
+
+    assert [e["content"] for e in events if e["type"] == "delta"] == ["Câu trả lời mới, không lặp."]
+    assert fake_brain_bundle.llm.chat_calls, "the retry goes through the buffered call"
+
+
+async def test_chat_stream_keeps_the_raw_reply_when_the_retry_repeats_too(client, fake_brain_bundle):
+    repeated = "Bạn muốn nghe chuyện khác hay tìm chủ đề mới?"
+    fake_brain_bundle.llm.stream_chunks = [repeated]
+    fake_brain_bundle.llm.response_text = repeated
+    fake_brain_bundle.memory.filter_assistant_response = lambda text, fallback="": ""
+
+    resp = await client.post("/v1/chat/stream", json={"query": "chủ đề mới để kể"})
+    events = _parse_sse(resp.text)
+
+    assert [e["content"] for e in events if e["type"] == "delta"] == [repeated]

@@ -45,6 +45,7 @@ networkx==3.4.2
 numba==0.65.1
 numpy==2.2.6
 onnxruntime==1.23.2
+opencv-python==5.0.0.93
 orjson==3.11.9
 packaging==26.2
 pandas==2.3.3
@@ -56,6 +57,7 @@ platformdirs==4.10.0
 pooch==1.9.0
 primp==2.0.0
 protobuf==7.35.1
+pyclipper==1.4.0
 pycparser==3.0
 pydantic==2.13.4
 pydantic_core==2.46.4
@@ -69,6 +71,7 @@ python-multipart==0.0.32
 pytz==2026.2
 PyYAML==6.0.3
 qdrant-client>=1.19.0
+rapidocr-onnxruntime==1.2.3
 regex==2026.5.9
 requests==2.34.2
 rich==15.0.0
@@ -81,6 +84,7 @@ semantic-version==2.10.0
 sentence-transformers>=5.7.0
 sentencepiece==0.2.1
 sherpa-onnx==1.13.6
+shapely==2.1.2
 shellingham==1.5.4
 six==1.17.0
 soundfile==0.14.0

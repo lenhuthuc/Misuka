@@ -129,9 +129,19 @@ class Settings(BaseSettings):
     # score approaches the threshold; fractional tokens round down.
     reasoning_min_tokens: int = Field(default=64)
     reasoning_max_tokens: int = Field(default=192)
-    # Applied after the -log curve and before floor. 0.65 cuts deliberation by
-    # roughly 35% while retaining the same confidence-dependent shape.
-    reasoning_token_scale: float = Field(default=0.65)
+    # Applied after the -log curve and before floor, so it compresses the whole
+    # min..max range rather than clipping one end. The hidden pass decodes on
+    # the same memory-bandwidth-bound runner as the answer itself, and the note
+    # it produces is then prefilled into the answer's own prompt, so every token
+    # here is charged twice to time-to-first-token: at 0.80 a zero-confidence
+    # turn deliberated for 153 tokens before a word was spoken. 0.45 holds the
+    # same confidence-dependent shape at a little over half the cost -- 86
+    # tokens at zero confidence, 37 at the midpoint, decaying to a 28-token
+    # floor at the threshold -- which still leaves a few lines, and a few lines
+    # of hint is all the note is ever used for. Cutting this further trades
+    # against note quality; `reasoning_activation_threshold` is the other lever,
+    # and it makes the pass fire less often rather than think less each time.
+    reasoning_token_scale: float = Field(default=0.45)
 
     # ── Web search (DuckDuckGo, via `ddgs`) ─────────────────────────────────
     # Fallback for live information neither the frozen local weights nor
@@ -180,13 +190,15 @@ class Settings(BaseSettings):
     knowledge_max_tokens: int = Field(default=480)
 
     # ── Memory ───────────────────────────────────────────────────────────────
-    # SQLite rows are individual messages, so 18 rows represent approximately
-    # nine user/assistant exchanges. These are checked before RAG is attempted.
-    memory_recent_limit: int = Field(default=18)
+    # SQLite rows are individual messages, so 6 rows represent approximately
+    # three user/assistant exchanges. The store is currently global rather than
+    # session-scoped, so a short window also prevents older chats leaking into
+    # a newly opened conversation.
+    memory_recent_limit: int = Field(default=6)
     # Ceiling on the verbatim history window, in characters. The message count
     # above bounds how many turns are considered; this bounds how much prompt
     # they are allowed to occupy, which is what prefill latency actually tracks.
-    memory_recent_char_budget: int = Field(default=3500)
+    memory_recent_char_budget: int = Field(default=1600)
     # Persistent sparse sentence index used to suppress assistant phrasing that
     # closely repeats prior replies. Scores are normalized BM25 similarities.
     bm25_repetition_threshold: float = Field(default=0.78)

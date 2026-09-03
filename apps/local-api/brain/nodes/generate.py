@@ -146,6 +146,27 @@ _DELIVER_NOW_INSTRUCTION = (
     "ngoài những gì có ở trên; phần nào không có thì nói thẳng là mình không chắc."
 )
 
+# The live-search counterpart of the block below, and the gap that let a turn
+# with real search results in its prompt answer as if it had none.
+#
+# `_KNOWLEDGE_ANSWER_INSTRUCTION` was gated on the *knowledge* classifier, so a
+# "live" turn -- "chủ đề gì đang hot" -- fetched real snippets, pasted them in,
+# and then said nothing about using them. With the fine-tune's "1-3 câu" rule
+# and chat-temperature decoding, the model spent those sentences on a chatty
+# offer to choose and left the notes unread; asked later for specifics it
+# invented a person, a district and a quote, because by then nothing in the
+# prompt connected the answer to the notes.
+#
+# Deliberately no length override: unlike a knowledge answer, a live one is a
+# fact or two, and the shape being enforced here is "use what is in front of
+# you", not "write more".
+_GROUNDED_ANSWER_INSTRUCTION = (
+    "Ghi chú ở trên là kết quả tìm kiếm thật, vừa lấy về xong. Trả lời dựa "
+    "thẳng vào đó: nêu tên, con số hoặc sự việc cụ thể có trong ghi chú, đừng "
+    "nói chung chung và đừng hứa sẽ kể. Chi tiết nào ghi chú không có thì nói "
+    "thẳng là mình không chắc, tuyệt đối không tự nghĩ ra."
+)
+
 # Emitted only when this turn actually retrieved something to answer from.
 # The fine-tune's "1-3 câu" rule is a spoken-register rule and it is right for
 # chat, but on a factual question it is the constraint that produces the tease:
@@ -214,6 +235,7 @@ def _turn_note(
     user_declines: bool = False,
     user_delegates: bool = False,
     grounded_knowledge: bool = False,
+    grounded_web: bool = False,
 ) -> str:
     """Assemble the per-turn system note, or "" when there is nothing to say.
 
@@ -238,8 +260,13 @@ def _turn_note(
         blocks.append(_NO_EMPTY_PROMISE_INSTRUCTION)
     else:
         blocks.append(_NO_EMPTY_PROMISE_INSTRUCTION + _ASK_BACK_CLAUSE)
+    # Mutually exclusive: the knowledge block already carries the grounding
+    # rule, and emitting both would say the same thing twice in a prompt whose
+    # block order is load-bearing.
     if grounded_knowledge:
         blocks.append(_KNOWLEDGE_ANSWER_INSTRUCTION)
+    elif grounded_web:
+        blocks.append(_GROUNDED_ANSWER_INSTRUCTION)
     if user_delegates:
         blocks.append(_DELIVER_NOW_INSTRUCTION)
     return "\n\n".join(blocks)
@@ -252,6 +279,7 @@ def build_messages(
     history_char_budget: int = 3000,
     response_policy_instruction: str = "",
     grounded_knowledge: bool = False,
+    grounded_web: bool = False,
 ) -> list[dict[str, str]]:
     """Build the full message list for a chat completion call.
 
@@ -279,6 +307,7 @@ def build_messages(
         user_declines=is_declining_to_elaborate(query),
         user_delegates=is_delegating_choice(query),
         grounded_knowledge=grounded_knowledge,
+        grounded_web=grounded_web,
     )
 
     messages: list[dict[str, str]] = list(history)

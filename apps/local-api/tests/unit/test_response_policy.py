@@ -1,4 +1,4 @@
-from brain.response_policy import derive_response_policy
+from brain.response_policy import ResponsePolicy, derive_response_policy
 from schemas.vad import VADScores
 
 
@@ -42,3 +42,20 @@ def test_an_activated_user_still_gets_a_short_reply_on_a_grounded_turn():
     assert policy.max_tokens == 256      # arousal's cap, not knowledge's 480
     assert policy.temperature == 0.30    # knowledge's floor, not arousal's 0.55
     assert "brief" in policy.instruction
+
+
+def test_live_web_results_get_colder_decoding_without_the_length_override():
+    """A live turn holds real snippets and needs the same consistency as a
+    knowledge turn, but its answer is a fact or two -- expanding it to the
+    knowledge budget pads, and padding next to real notes is where invention
+    starts."""
+    policy = ResponsePolicy().for_grounded_web(0.30)
+
+    assert policy.temperature == 0.30
+    assert policy.max_tokens is None
+
+
+def test_grounded_web_never_raises_a_temperature_the_vad_policy_already_lowered():
+    policy = ResponsePolicy(temperature=0.20).for_grounded_web(0.30)
+
+    assert policy.temperature == 0.20

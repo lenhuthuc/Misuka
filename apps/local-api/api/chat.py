@@ -118,6 +118,70 @@ def _filter_repeated_response(container: ServiceContainer, text: str, *, fallbac
     return filter_response(text, fallback=fallback)
 
 
+# Sent only on the retry, after BM25 has already judged a whole reply to be
+# something the assistant has said before. It states the finding rather than
+# adding another standing rule to the turn note: the standing rules are read on
+# every turn and this one is true on roughly seven in a hundred, so carrying it
+# always would spend prefill on every turn to describe a rare event -- and give
+# the model one more prohibition to satisfy with a question.
+_REPETITION_RETRY_NOTE = (
+    "Câu trả lời bạn vừa viết lặp lại gần như nguyên văn một câu bạn đã nói "
+    "trước đó trong cuộc trò chuyện này, nên nó bị bỏ. Viết lại bằng nội dung "
+    "khác hẳn: trả lời thẳng vào điều người dùng vừa nói, không hỏi lại, không "
+    "lặp lại lời mời hay câu hỏi cũ."
+)
+
+
+def _with_repetition_note(messages: list[dict[str, str]]) -> list[dict[str, str]] | None:
+    """Same messages, plus the retry note in the position that works.
+
+    Returns None when there is nowhere safe to put it. The note has to land
+    immediately before the user's question -- see the layout rule at the top of
+    `brain/nodes/generate.py`: after the user message the model reads the note
+    as the user's words, and at index 0 it silently replaces the Modelfile
+    persona. On a turn with no history there is no such position, so that turn
+    keeps the old behaviour rather than losing the persona to a retry.
+    """
+    if len(messages) < 2:
+        return None
+    head, user = list(messages[:-1]), messages[-1]
+    if head[-1]["role"] == "system":
+        # Merge, so the note stays the last thing read before the question.
+        head[-1] = {**head[-1], "content": f"{head[-1]['content']}\n\n{_REPETITION_RETRY_NOTE}"}
+    else:
+        head.append({"role": "system", "content": _REPETITION_RETRY_NOTE})
+    return [*head, user]
+
+
+async def _regenerate_without_repetition(
+    container: ServiceContainer,
+    messages: list[dict[str, str]],
+    options: dict,
+    operation: str,
+) -> str:
+    """One more attempt at a reply BM25 rejected in full. "" if it cannot help.
+
+    Only ever reached when the filter emptied the reply completely, which the
+    logs put at a few percent of turns -- so the extra generation is paid
+    rarely, and only where the alternative is repeating a sentence back at the
+    user word for word.
+    """
+    retry_messages = _with_repetition_note(messages)
+    if retry_messages is None:
+        return ""
+    try:
+        retry_text = await container.llm.chat(retry_messages, options=options)
+    except Exception:
+        logger.exception("%s | repetition retry failed, keeping the original reply", operation)
+        return ""
+    kept = _filter_repeated_response(container, retry_text)
+    if kept.strip():
+        logger.info("%s | repetition retry produced a fresh reply", operation)
+        return kept
+    logger.info("%s | repetition retry repeated too, falling back to raw text", operation)
+    return ""
+
+
 async def _with_optional_reasoning(container: ServiceContainer, turn, operation: str) -> list[dict[str, str]]:
     """Run the hidden deliberation pass without making it a turn dependency.
 
@@ -165,19 +229,25 @@ async def chat(body: ChatRequest, container: ServiceContainer = Depends(get_cont
             policy = turn.response_policy
             with log_duration(logger, "llm.chat", component="llm"):
                 messages = await _with_optional_reasoning(container, turn, "chat")
-                response_text = await container.llm.chat(
-                    messages,
-                    options=policy.options(container.llm.temperature, container.llm.max_tokens),
-                )
-                # Falling back to the model's own unfiltered text — rather than a
-                # fixed canned phrase — keeps a repetition hit from ever becoming
-                # the *content* of the reply: a fixed fallback would itself join
-                # the BM25 corpus and, being short and generic, start colliding
-                # with future turns, spamming itself back in an ever-tightening
-                # loop. A repeated-but-real answer is the safe failure mode here.
-                response_text = _filter_repeated_response(
-                    container, response_text, fallback=response_text
-                )
+                options = policy.options(container.llm.temperature, container.llm.max_tokens)
+                response_text = await container.llm.chat(messages, options=options)
+                # Three outcomes, not two. Some sentences flagged: keep what
+                # survived. Every sentence flagged: ask the model once more,
+                # telling it what happened -- this is the case the filter
+                # exists for, and emitting the raw text here handed the user
+                # back the very sentence BM25 had just caught.
+                #
+                # Only if the retry repeats too does the raw text stand. That
+                # last resort is still the model's own words rather than a
+                # fixed canned phrase, which would itself join the BM25 corpus
+                # and, being short and generic, start colliding with future
+                # turns and spamming itself back in an ever-tightening loop.
+                kept = _filter_repeated_response(container, response_text)
+                if not kept.strip():
+                    kept = await _regenerate_without_repetition(
+                        container, messages, options, "chat"
+                    )
+                response_text = kept.strip() or response_text
                 # The prompt asked for no closing question; this is what makes
                 # it true. On these weights the instruction held two times in
                 # three, and the third is what the user actually noticed.
@@ -266,9 +336,9 @@ async def chat_stream(body: ChatRequest, container: ServiceContainer = Depends(g
                     # than emitted. Costs one sentence of latency, and only on
                     # a turn that forbids questions and whose reply has one.
                     suppressor = TrailingQuestionSuppressor() if turn.forbids_questions else None
+                    options = policy.options(container.llm.temperature, container.llm.max_tokens)
                     async for raw_chunk in container.llm.stream_chat(
-                        messages,
-                        options=policy.options(container.llm.temperature, container.llm.max_tokens),
+                        messages, options=options,
                     ):
                         pending += raw_chunk
                         completed, pending = take_complete_sentences(pending)
@@ -310,13 +380,28 @@ async def chat_stream(body: ChatRequest, container: ServiceContainer = Depends(g
                         yield f"data: {event.model_dump_json()}\n\n"
 
                     if not emitted_tail and not full_response:
-                        # Every sentence got flagged as repetitive -- fall back to
-                        # what the model actually said (see the buffered handler's
-                        # matching comment) instead of a fixed canned phrase, which
-                        # would itself join the BM25 corpus and spam back in later
-                        # turns. Only when the model produced nothing at all does
-                        # the canned phrase remain as the last resort.
-                        full_response = (raw_response + pending).strip() or "Mình hiểu rồi."
+                        # Every sentence got flagged as repetitive. Nothing has
+                        # reached the client yet, so the turn can still be
+                        # rewritten -- ask once more with the reason, and only
+                        # keep the raw text if that comes back repetitive too.
+                        #
+                        # The retry is generated whole rather than streamed. It
+                        # would mean running this loop's machinery a second
+                        # time for a path the logs put at a few percent of
+                        # turns, and the fallback it replaces emitted its text
+                        # in one delta anyway.
+                        retry = await _regenerate_without_repetition(
+                            container, messages, options, "chat_stream"
+                        )
+                        # Last resort stays the model's own words, not a fixed
+                        # canned phrase, which would itself join the BM25 corpus
+                        # and spam back in later turns. The canned line is only
+                        # for a turn that generated nothing at all.
+                        full_response = (
+                            retry.strip()
+                            or (raw_response + pending).strip()
+                            or "Mình hiểu rồi."
+                        )
                         event = ChatStreamDeltaEvent(turn_id=turn_id, content=full_response)
                         yield f"data: {event.model_dump_json()}\n\n"
 

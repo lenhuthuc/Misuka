@@ -16,6 +16,11 @@ The `airi/` directory is based on [moeru-ai/airi](https://github.com/moeru-ai/ai
 - **`apps/local-api`**: the single FastAPI app (port 8010, entry point `main.py`) — VAD/emotion
   analysis, Whisper transcription, Piper TTS, and the RAG/LLM "brain" all live here. See
   [CONTEXT.md](CONTEXT.md) for the full architecture (data flow, SSE envelope, logging).
+- **`apps/local-api/vision/`**: image understanding — YOLO11n + RapidOCR + CLIP run locally
+  the moment an image arrives, and a cloud VLM is called only for questions those cannot
+  answer. Everything reaches the chat as Vietnamese text. Self-contained (no HTTP route yet);
+  see [apps/local-api/vision/README.md](apps/local-api/vision/README.md) for setup, the VLM
+  provider settings, tunable thresholds and measured latency on this machine.
 - **`tools/legacy/whisper_server.py`**: a standalone, legacy Whisper-only server (port 9000,
   OpenAI-compatible `/v1/audio/transcriptions`) kept separate from `apps/local-api` for ad-hoc testing.
 - **Model files**: Piper TTS voices live under `assets/models/voices/` (`*.onnx` + `*.onnx.json`,

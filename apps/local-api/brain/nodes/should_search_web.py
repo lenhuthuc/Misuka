@@ -14,7 +14,14 @@ from brain.nodes.should_rag import is_delegating_choice
 _EXTERNAL_INFO_PATTERNS = re.compile(
     r"("
     r"thời tiết|dự báo thời tiết|nhiệt độ (?:hôm nay|ngày mai|bây giờ)"
-    r"|tin tức|tin mới nhất|thời sự"
+    r"|tin tức|tin mới nhất|thời sự|tin nóng"
+    # "what is everyone talking about right now" is as live as a gold price and
+    # was the one live class with no keyword: a user asking for "chủ đề nóng
+    # nhất" got no search, so the model answered from frozen weights -- which
+    # for a question about *today* means answering from nothing, and it looped
+    # asking the user to pick instead.
+    r"|chủ đề (?:nóng|hot)|(?:đang|hiện đang) (?:hot|nóng|được quan tâm)"
+    r"|xu hướng (?:hiện nay|mới nhất|bây giờ)|trending|sự kiện nổi bật"
     r"|giá (?:vàng|xăng|dầu|cổ phiếu|bitcoin|đô la|usd)|tỷ giá"
     r"|kết quả (?:trận|bóng đá|xổ số)|xổ số|tỷ số"
     r"|weather (?:today|forecast|tomorrow)|latest news|breaking news"
@@ -109,9 +116,17 @@ _SEARCH_LEAD_IN = re.compile(
 )
 
 _SEARCH_TAIL = re.compile(
-    r"(?:[\s,]+(?:nhé|nhỉ|đi|với|ạ|thế|vậy|hả|hử|nha|nào))*\s*[?.!]*\s*$",
+    r"(?:[\s,]+(?:mà\s+(?:chọn|kể|nói|tìm)|nhé|nhỉ|đi|với|ạ|thế|vậy|hả|hử|nha|nào))*"
+    r"\s*[?.!]*\s*$",
     re.IGNORECASE,
 )
+
+# A delegation clause in front of the actual subject: "bạn cứ chọn đi, chủ đề
+# nóng nhất mà chọn". The topic is everything after the comma, and sending the
+# whole utterance instead ranks pages containing that phrasing rather than
+# pages about the subject -- which is the failure `to_search_query` exists to
+# prevent, just arriving from a different direction.
+_SEARCH_DELEGATION_PREFIX = re.compile(r"^[^,]{0,40}?,\s*", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -135,7 +150,17 @@ class WebSearchDecision:
 
 def to_search_query(text: str) -> str:
     """Reduce a spoken question to the topic terms worth sending to a search engine."""
-    stripped = _SEARCH_LEAD_IN.sub("", text.strip())
+    stripped = text.strip()
+
+    # Drop a leading delegation clause, but only when what follows still names
+    # something -- "bạn cứ chọn đi" on its own has no remainder to search.
+    match = _SEARCH_DELEGATION_PREFIX.match(stripped)
+    if match and is_delegating_choice(match.group(0)):
+        remainder = stripped[match.end():].strip()
+        if remainder:
+            stripped = remainder
+
+    stripped = _SEARCH_LEAD_IN.sub("", stripped)
     return _SEARCH_TAIL.sub("", stripped).strip()
 
 

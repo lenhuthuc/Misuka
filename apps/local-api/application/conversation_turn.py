@@ -160,19 +160,30 @@ async def prepare_turn(
         enabled=reasoning_enabled,
     )
 
-    # Grounded, not merely *asked*: the knowledge treatment is earned by having
-    # results in hand. A knowledge question whose search returned nothing gets
-    # the ordinary chat decoding, because a longer, colder answer with no notes
-    # behind it is just a longer, more confident invention.
-    grounded_knowledge = web_decision.kind == "knowledge" and bool(web_context)
+    # Grounded, not merely *asked*: the treatment is earned by having results in
+    # hand. A question whose search returned nothing gets the ordinary chat
+    # decoding, because a colder, longer answer with no notes behind it is just
+    # a more confident invention.
+    #
+    # Which *gate* fetched them is a separate question from whether they are
+    # there, and conflating the two was a bug: a "live" turn used to get its
+    # snippets pasted into the prompt with no instruction to use them and
+    # chat-temperature decoding, so the model talked past them. Both kinds now
+    # get the grounding treatment; only a knowledge turn also gets the 3-5
+    # sentence length override, because a live answer is a fact or two.
+    grounded_web = bool(web_context)
+    grounded_knowledge = web_decision.kind == "knowledge" and grounded_web
     policy = response_policy or ResponsePolicy()
     if grounded_knowledge:
         policy = policy.for_grounded_knowledge(knowledge_temperature, knowledge_max_tokens)
+    elif grounded_web:
+        policy = policy.for_grounded_web(knowledge_temperature)
 
     messages = build_messages(
         query, context, recent, history_char_budget,
         response_policy_instruction=policy.instruction,
         grounded_knowledge=grounded_knowledge,
+        grounded_web=grounded_web,
     )
 
     # Prefill cost is linear in prompt size and dominates time-to-first-token on
@@ -183,11 +194,11 @@ async def prepare_turn(
     logger.info(
         "turn prompt | messages=%d docs=%d web_results=%d context_chars=%d total_chars=%d "
         "thinking=%s thinking_budget=%d context_confidence=%.3f rag_score=%.3f history_score=%.3f "
-        "web=%s web_inherited=%s grounded_knowledge=%s",
+        "web=%s web_inherited=%s grounded_web=%s grounded_knowledge=%s",
         len(messages), len(retrieved_docs), len(web_results), context_chars, total_chars,
         reasoning.enabled, reasoning.token_budget, reasoning.confidence,
         reasoning.rag_score, reasoning.history_score,
-        web_decision.kind or "none", web_decision.inherited, grounded_knowledge,
+        web_decision.kind or "none", web_decision.inherited, grounded_web, grounded_knowledge,
     )
 
     return TurnContext(
