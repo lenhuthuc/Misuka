@@ -4,11 +4,11 @@ import { storeToRefs } from 'pinia'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import Button from '../shared/Button.vue'
 import Modal from '../shared/Modal.vue'
 import Slider from '../shared/Slider.vue'
 import Toggle from '../shared/Toggle.vue'
 import GeneralSettings from './GeneralSettings.vue'
+import ImageSettings from './ImageSettings.vue'
 
 const emit = defineEmits<{ (e: 'pickBackground'): void }>()
 
@@ -29,6 +29,7 @@ interface Tab {
 const TABS: Tab[] = [
   { id: 'general', label: 'Chung', icon: 'i-solar:settings-outline' },
   { id: 'appearance', label: 'Giao diện', icon: 'i-solar:palette-outline' },
+  { id: 'images', label: 'Hình ảnh', icon: 'i-solar:gallery-wide-outline' },
   {
     id: 'character',
     label: 'Nhân vật',
@@ -127,16 +128,12 @@ function go(to: string) {
             </span>
             <Toggle v-model="themeColorsHueDynamic" label="Tông màu chuyển động" />
           </div>
-          <div class="settings-inline">
-            <span class="settings-inline-label">
-              Ảnh nền sân khấu
-              <small>Chọn ảnh hoặc hiệu ứng nền phía sau Mitsuka</small>
-            </span>
-            <Button size="sm" variant="soft" @click="emit('pickBackground'); open = false">
-              Chọn ảnh nền
-            </Button>
-          </div>
         </div>
+
+        <ImageSettings
+          v-else-if="activeId === 'images'"
+          @pick-background="emit('pickBackground'); open = false"
+        />
 
         <div v-else class="settings-block">
           <button

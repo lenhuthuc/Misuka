@@ -97,6 +97,7 @@ function runAndClose(action: 'newConversation' | 'openSettings') {
 <style scoped>
 .chat-header {
   display: flex;
+  overflow-x: auto;
   align-items: center;
   border-bottom: 1px solid var(--mk-border);
   padding: 0.7rem 0.85rem;
@@ -105,6 +106,7 @@ function runAndClose(action: 'newConversation' | 'openSettings') {
 
 .chat-day {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   border: 1px solid var(--mk-border);
   border-radius: 999px;
@@ -116,6 +118,7 @@ function runAndClose(action: 'newConversation' | 'openSettings') {
   font-size: 0.74rem;
   font-weight: 700;
   gap: 0.32rem;
+  white-space: nowrap;
 }
 
 .chat-day:hover { background: var(--mk-hover); }
@@ -135,6 +138,7 @@ function runAndClose(action: 'newConversation' | 'openSettings') {
 
 .chat-header-actions {
   display: flex;
+  flex-shrink: 0;
   margin-left: auto;
   align-items: center;
   gap: 0.3rem;

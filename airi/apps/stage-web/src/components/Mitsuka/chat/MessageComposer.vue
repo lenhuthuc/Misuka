@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onClickOutside } from '@vueuse/core'
-import { nextTick, ref, watch } from 'vue'
+import { BasicInputFile } from '@proj-airi/ui'
+import { onClickOutside, useObjectUrl } from '@vueuse/core'
+import { nextTick, ref, shallowRef, watch } from 'vue'
 
 import IconButton from '../shared/IconButton.vue'
 
@@ -11,7 +12,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'send', text: string): void
+  (e: 'send', text: string, image?: File): void
   (e: 'toggleListening'): void
 }>()
 
@@ -27,6 +28,21 @@ const composing = ref(false)
 onClickOutside(emojiPanel, () => {
   emojiOpen.value = false
 })
+
+// `BasicInputFile` always assigns a fresh array on pick, so this fires even
+// when the same file is re-picked after being removed.
+const pickedImages = ref<File[]>([])
+const attachedImage = shallowRef<File>()
+const attachedImageUrl = useObjectUrl(attachedImage)
+
+watch(pickedImages, (files) => {
+  if (files?.[0])
+    attachedImage.value = files[0]
+})
+
+function removeAttachedImage() {
+  attachedImage.value = undefined
+}
 
 function resize() {
   const el = textarea.value
@@ -64,16 +80,31 @@ function insertCodeBlock() {
 
 function submit() {
   const text = model.value.trim()
-  if (!text || composing.value || props.busy)
+  const image = attachedImage.value
+  if ((!text && !image) || composing.value || props.busy)
     return
   model.value = ''
+  attachedImage.value = undefined
   void nextTick(resize)
-  emit('send', text)
+  emit('send', text, image)
 }
 </script>
 
 <template>
   <form class="composer" @submit.prevent="submit">
+    <div v-if="attachedImageUrl" class="composer-attachment">
+      <img :src="attachedImageUrl" alt="Ảnh sẽ gửi kèm">
+      <button
+        type="button"
+        class="composer-attachment-remove"
+        aria-label="Bỏ ảnh đính kèm"
+        title="Bỏ ảnh đính kèm"
+        @click="removeAttachedImage"
+      >
+        <span class="i-solar:close-circle-bold" />
+      </button>
+    </div>
+
     <textarea
       ref="textarea"
       v-model="model"
@@ -116,6 +147,10 @@ function submit() {
           @click="insertCodeBlock"
         />
 
+        <BasicInputFile v-model="pickedImages" accept="image/*">
+          <IconButton icon="i-solar:gallery-add-outline" label="Đính kèm ảnh" size="sm" />
+        </BasicInputFile>
+
         <IconButton
           :icon="listening ? 'i-solar:microphone-3-bold' : 'i-solar:microphone-3-outline'"
           :label="listening ? 'Tắt lắng nghe' : 'Bật lắng nghe'"
@@ -125,7 +160,7 @@ function submit() {
         />
       </div>
 
-      <button class="composer-send" type="submit" :disabled="!model.trim() || busy" :aria-label="busy ? 'Đang xử lý' : 'Gửi tin nhắn'">
+      <button class="composer-send" type="submit" :disabled="(!model.trim() && !attachedImage) || busy" :aria-label="busy ? 'Đang xử lý' : 'Gửi tin nhắn'">
         <span v-if="busy" class="i-svg-spinners:90-ring-with-bg" />
         <span v-else class="i-solar:plain-2-outline" />
       </button>
@@ -147,6 +182,38 @@ function submit() {
 }
 
 .composer:focus-within { border-color: rgb(171 125 255 / 0.4); }
+
+.composer-attachment {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 0.55rem;
+}
+
+.composer-attachment img {
+  display: block;
+  max-width: 9rem;
+  max-height: 6.5rem;
+  border: 1px solid var(--mk-border);
+  border-radius: var(--mk-radius-sm);
+  object-fit: cover;
+}
+
+.composer-attachment-remove {
+  position: absolute;
+  top: -0.4rem;
+  right: -0.4rem;
+  display: grid;
+  width: 1.2rem;
+  height: 1.2rem;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--mk-panel-solid);
+  color: var(--mk-danger);
+  cursor: pointer;
+  font-size: 1.05rem;
+  line-height: 1;
+}
 
 .composer textarea {
   display: block;

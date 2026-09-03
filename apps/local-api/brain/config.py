@@ -164,6 +164,25 @@ class Settings(BaseSettings):
     # shopping questions still search, knowledge questions go ungrounded.
     web_search_knowledge_enabled: bool = Field(default=True)
 
+    # ── Vision captioning ────────────────────────────────────────────────────
+    # `POST /v1/vision/caption` turns an uploaded image into a short text
+    # description via a local VLM (brain/caption_service.py: moondream2, then
+    # Florence-2, then a placeholder that returns ""). The chat model itself
+    # never sees pixels -- this is how an attached image reaches it at all,
+    # by becoming words the same Qwen text model can read. `CaptionService`
+    # downloads its weights from Hugging Face on first use and degrades to the
+    # placeholder if that fails, so leaving this on costs nothing on a machine
+    # that never calls the endpoint; turn it off to skip that download
+    # entirely (e.g. no network, or the disk/RAM it would take).
+    vision_captioning_enabled: bool = Field(default=True)
+    # CPU inference on a VLM is slow and has no cancellation point of its own
+    # (it is one blocking `model.generate()` call in a thread executor), so
+    # this is the only thing standing between a slow caption and a request
+    # that never returns. A timeout degrades to `caption=""` -- the same
+    # "best-effort enrichment, never a hard failure" contract as RAG/web
+    # search -- rather than surfacing as an error the frontend has to handle.
+    vision_caption_timeout_seconds: float = Field(default=30.0)
+
     # ── Knowledge-turn decoding ─────────────────────────────────────────────
     # A grounded factual turn is decoded differently from a chat turn. The
     # conversational 0.65 (with the Modelfile's top_p 0.9) is what makes the

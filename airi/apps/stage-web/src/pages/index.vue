@@ -48,7 +48,11 @@ const localConv = useLocalConversation({
 })
 const { state: localState, turn: localTurn, transcript: localTranscript, reply: localReply, error: localError } = localConv
 
-const busy = computed(() => localState.value === 'transcribing' || localState.value === 'thinking')
+// True while an attached image is being captioned (see `send()`) — happens
+// before `processText` starts the turn, so `localState` alone would leave
+// the composer looking idle for however long the VLM call takes.
+const captioningImage = ref(false)
+const busy = computed(() => localState.value === 'transcribing' || localState.value === 'thinking' || captioningImage.value)
 
 // ── Chat transcript ────────────────────────────────────────────────────────
 // `useLocalConversation` only tracks the *current* turn (one transcript, one
@@ -70,6 +74,20 @@ const messages = ref<ChatMessage[]>([
 // — because it is also what tells the typing indicator the reply has landed.
 const replyId = ref<string | null>(null)
 let userBubbleTurn = -1
+// Set by `send()` right before starting a turn with an attached image, and
+// consumed by the user-bubble watcher below. `processText`'s query carries a
+// VLM-generated description of the image folded in as extra context for the
+// text-only chat model — `displayContent`, when set, overrides the bubble
+// back to just what the user actually typed, so that description never
+// leaks into their own chat history.
+let pendingUserBubble: { imageUrl?: string, displayContent?: string } | undefined
+// Every object URL a message bubble might still be pointing at, so they can
+// all be released together instead of leaking one per attached image.
+const attachmentObjectUrls: string[] = []
+function releaseAttachmentObjectUrls() {
+  for (const url of attachmentObjectUrls.splice(0))
+    URL.revokeObjectURL(url)
+}
 // A ref, not a plain local: `thinking` below is computed from it, so the
 // typing indicator has to re-evaluate the moment the first token lands.
 const replyTurn = ref(-1)
@@ -86,7 +104,15 @@ watch([localTurn, localTranscript], ([turn, text]) => {
   if (!text || turn === userBubbleTurn)
     return
   userBubbleTurn = turn
-  messages.value.push({ id: nextMessageId(), role: 'user', content: text, at: Date.now() })
+  const bubble = pendingUserBubble
+  pendingUserBubble = undefined
+  messages.value.push({
+    id: nextMessageId(),
+    role: 'user',
+    content: bubble?.displayContent ?? text,
+    at: Date.now(),
+    imageUrl: bubble?.imageUrl,
+  })
 })
 
 watch([localTurn, localReply], ([turn, text]) => {
@@ -122,14 +148,78 @@ watch(localState, (state) => {
 // carries on showing that the reply is still arriving.
 const thinking = computed(() => busy.value && replyTurn.value !== localTurn.value)
 
-async function send(text: string) {
-  await localConv.processText(text)
+// Chat's own model is text-only, so an attached image only ever reaches it
+// as words: /v1/vision/caption runs a local VLM over the image and hands
+// back a short description, which is folded into the query sent to
+// `processText`. Best-effort like RAG/web search elsewhere in this pipeline —
+// a failed or disabled captioning call degrades to "", never blocks sending.
+async function captionImage(image: File): Promise<string> {
+  captioningImage.value = true
+  try {
+    const form = new FormData()
+    form.append('image', image)
+    const response = await fetch(`${LOCAL_API_URL}/v1/vision/caption`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(35000),
+    })
+    if (!response.ok)
+      return ''
+    const body = await response.json() as { caption?: string }
+    return body.caption ?? ''
+  }
+  catch (error) {
+    console.warn('[vision] captioning failed, sending without it', error)
+    return ''
+  }
+  finally {
+    captioningImage.value = false
+  }
+}
+
+async function send(text: string, image?: File) {
+  if (!text && !image)
+    return
+
+  if (!image) {
+    await localConv.processText(text)
+    return
+  }
+
+  const url = URL.createObjectURL(image)
+  attachmentObjectUrls.push(url)
+  const caption = await captionImage(image)
+
+  if (!caption) {
+    // Nothing came back to add — either captioning is disabled/unavailable,
+    // or it just failed. With no typed caption either, there is nothing left
+    // for the text-only model to answer, so this stays a local-only bubble.
+    if (!text) {
+      messages.value.push({ id: nextMessageId(), role: 'user', content: '', at: Date.now(), imageUrl: url })
+      return
+    }
+    pendingUserBubble = { imageUrl: url }
+    await localConv.processText(text)
+    return
+  }
+
+  const query = text
+    ? `${text}\n[Mô tả ảnh đính kèm, do hệ thống tự nhận diện: ${caption}]`
+    : `Mình vừa gửi một bức ảnh. Hệ thống nhận diện nội dung ảnh là: "${caption}". Hãy bình luận hoặc trả lời phù hợp.`
+
+  // `displayContent: text` (not the combined `query`) keeps the VLM's own
+  // wording out of the user's chat history — they see what they typed (or
+  // nothing) plus their image, never the auto-generated description.
+  pendingUserBubble = { imageUrl: url, displayContent: text }
+  await localConv.processText(query)
 }
 
 function newConversation() {
   localConv.reset()
   clearTimeout(streamSettleTimer)
   replyId.value = null
+  pendingUserBubble = undefined
+  releaseAttachmentObjectUrls()
   messages.value = [{ id: nextMessageId(), role: 'assistant', content: GREETING, at: Date.now() }]
 }
 
@@ -380,6 +470,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopAudioInteraction()
   clearTimeout(streamSettleTimer)
+  releaseAttachmentObjectUrls()
   if (healthTimer)
     clearInterval(healthTimer)
 })

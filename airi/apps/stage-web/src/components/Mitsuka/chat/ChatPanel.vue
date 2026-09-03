@@ -18,7 +18,7 @@ defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'send', text: string): void
+  (e: 'send', text: string, image?: File): void
   (e: 'pickQuickAction', action: QuickAction): void
   (e: 'toggleListening' | 'toggleTheme' | 'newConversation' | 'openSettings'): void
 }>()
@@ -54,7 +54,7 @@ const draft = defineModel<string>('draft', { default: '' })
       v-model="draft"
       :listening="listening"
       :busy="busy"
-      @send="text => emit('send', text)"
+      @send="(text, image) => emit('send', text, image)"
       @toggle-listening="emit('toggleListening')"
     />
   </section>

@@ -22,6 +22,7 @@ from api.chat import router as chat_router  # noqa: E402
 from api.emotion_vad import router as emotion_vad_router  # noqa: E402
 from api.tts import router as tts_router  # noqa: E402
 from api.vad import router as vad_router  # noqa: E402
+from api.vision import router as vision_router  # noqa: E402
 from api.whisper import router as whisper_router  # noqa: E402
 from brain.config import Settings, get_settings  # noqa: E402
 from core.container import ServiceContainer  # noqa: E402
@@ -96,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(tts_router)
     app.include_router(whisper_router)
     app.include_router(chat_router)
+    app.include_router(vision_router)
 
     @app.get("/health/live")
     def health_live():
