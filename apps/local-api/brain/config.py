@@ -176,21 +176,21 @@ class Settings(BaseSettings):
 
     # ── Vision captioning ────────────────────────────────────────────────────
     # `POST /v1/vision/caption` turns an uploaded image into a short text
-    # description via a local VLM (brain/caption_service.py: moondream2, then
-    # Florence-2, then a placeholder that returns ""). The chat model itself
-    # never sees pixels -- this is how an attached image reaches it at all,
-    # by becoming words the same Qwen text model can read. `CaptionService`
-    # downloads its weights from Hugging Face on first use and degrades to the
-    # placeholder if that fails, so leaving this on costs nothing on a machine
-    # that never calls the endpoint; turn it off to skip that download
-    # entirely (e.g. no network, or the disk/RAM it would take).
+    # description through the `vision/` pipeline (brain/caption_service.py ->
+    # YOLO11n + RapidOCR + CLIP, the graphs already exported to
+    # assets/models/vision/). The chat model itself never sees pixels -- this
+    # is how an attached image reaches it at all, by becoming words the same
+    # Qwen text model can read. Turning this off skips loading those graphs at
+    # startup on a machine that never calls the endpoint; the endpoint then
+    # answers `caption=""`.
     vision_captioning_enabled: bool = Field(default=True)
-    # CPU inference on a VLM is slow and has no cancellation point of its own
-    # (it is one blocking `model.generate()` call in a thread executor), so
-    # this is the only thing standing between a slow caption and a request
-    # that never returns. A timeout degrades to `caption=""` -- the same
-    # "best-effort enrichment, never a hard failure" contract as RAG/web
-    # search -- rather than surfacing as an error the frontend has to handle.
+    # The ingest is three CPU models in a thread pool with no cancellation
+    # point of its own, so this is the only thing standing between a slow
+    # caption and a request that never returns. A timeout degrades to
+    # `caption=""` -- the same "best-effort enrichment, never a hard failure"
+    # contract as RAG/web search -- rather than surfacing as an error the
+    # frontend has to handle. Dense screenshots are the slow case: OCR is
+    # where the seconds go.
     vision_caption_timeout_seconds: float = Field(default=30.0)
 
     # ── Knowledge-turn decoding ─────────────────────────────────────────────
@@ -210,9 +210,9 @@ class Settings(BaseSettings):
 
     # ── Memory ───────────────────────────────────────────────────────────────
     # SQLite rows are individual messages, so 6 rows represent approximately
-    # three user/assistant exchanges. The store is currently global rather than
-    # session-scoped, so a short window also prevents older chats leaking into
-    # a newly opened conversation.
+    # three user/assistant exchanges. The store is scoped by `session_id`
+    # (rows written before sessions existed read as `default`), so this is
+    # purely a prefill/latency budget rather than a leak guard.
     memory_recent_limit: int = Field(default=6)
     # Ceiling on the verbatim history window, in characters. The message count
     # above bounds how many turns are considered; this bounds how much prompt
@@ -223,6 +223,56 @@ class Settings(BaseSettings):
     bm25_repetition_threshold: float = Field(default=0.78)
     bm25_repetition_min_tokens: int = Field(default=5)
     bm25_repetition_max_sentences: int = Field(default=2000)
+
+    # ── Cloud backend (Gemini via Google AI Studio) ──────────────────────────
+    # Read from the GEMINI_API_KEY environment variable / .env. Empty means the
+    # graph never routes to cloud at all — `route_backend` treats a missing key
+    # as one of its three fallback conditions rather than as an error.
+    gemini_api_key: str = Field(default="")
+    # Keep this as the one default model name. A user can override it with
+    # GEMINI_MODEL when their Google AI Studio account exposes a different one.
+    gemini_model: str = Field(default="gemini-3.5-flash-lite")
+    # Set false to pin every turn to the local fine-tune without unsetting the
+    # key — useful for A/B-ing the two backends on the same conversation.
+    cloud_enabled: bool = Field(default=True)
+    # Shorter than the local timeout on purpose: a person is waiting to hear a
+    # sentence, and falling back to a model that is already resident beats
+    # waiting out a slow network.
+    cloud_timeout_seconds: float = Field(default=30.0)
+    cloud_max_retries: int = Field(default=1)
+    # How long a connection failure (not a quota failure) parks the cloud route.
+    cloud_transient_cooldown_seconds: float = Field(default=60.0)
+    # Free-tier daily quotas roll over at midnight Pacific, so a quota failure
+    # parks the route until then rather than for a fixed 24 hours.
+    cloud_quota_reset_timezone: str = Field(default="America/Los_Angeles")
+
+    # ── Conversation graph ───────────────────────────────────────────────────
+    # Exchanges kept verbatim before the oldest are folded into the session's
+    # rolling summary. Distinct from `memory_recent_limit`, which is how many
+    # rows the *prompt* carries — that one is a latency budget and stays smaller.
+    graph_history_turns: int = Field(default=12)
+    graph_summary_max_tokens: int = Field(default=160)
+    graph_summary_defer_timeout: float = Field(default=90.0)
+    # One retry, matching the existing repetition-retry path. A second would
+    # double worst-case latency for a case the logs put at a few percent.
+    graph_max_regenerations: int = Field(default=1)
+
+    # ── Reply guard ──────────────────────────────────────────────────────────
+    # The persona asks for 1–3 sentences; these are the points past which a
+    # reply is judged to have run away from that rather than merely gone long.
+    guard_max_sentences: int = Field(default=5)
+    guard_max_chars: int = Field(default=600)
+    # Ratio against the immediately previous assistant turn, above which the
+    # reply counts as the model repeating itself and is regenerated once.
+    guard_previous_turn_similarity: float = Field(default=0.85)
+
+    # ── Turn metrics (JSONL) ─────────────────────────────────────────────────
+    # One line per turn: route, tokens, latency, guard flags. Separate from
+    # mitsuka.log because the questions it answers are counting questions.
+    turn_metrics_enabled: bool = Field(default=True)
+    turn_metrics_path: Path = Field(
+        default=Path(__file__).parent.parent / "logs" / "turns.jsonl"
+    )
 
     # ── Logging ──────────────────────────────────────────────────────────────
     log_level: str = Field(default="INFO")

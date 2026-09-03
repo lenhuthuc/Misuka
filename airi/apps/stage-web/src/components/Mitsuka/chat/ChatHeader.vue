@@ -5,29 +5,20 @@ import { computed, ref } from 'vue'
 import IconButton from '../shared/IconButton.vue'
 
 defineProps<{
-  listening: boolean
   dark: boolean
 }>()
 
 const emit = defineEmits<{
-  (e: 'toggleListening' | 'toggleTheme' | 'newConversation' | 'openSettings'): void
+  (e: 'toggleTheme' | 'newConversation' | 'openSettings'): void
 }>()
 
 const now = new Date()
-const showFullDate = ref(false)
 const menuOpen = ref(false)
 const menu = ref<HTMLElement | null>(null)
 
 onClickOutside(menu, () => {
   menuOpen.value = false
 })
-
-const fullDate = computed(() => now.toLocaleDateString('vi-VN', {
-  weekday: 'long',
-  day: '2-digit',
-  month: '2-digit',
-  year: 'numeric',
-}))
 
 const greeting = computed(() => {
   const hour = now.getHours()
@@ -40,7 +31,7 @@ const greeting = computed(() => {
   return { emoji: '🌙', text: 'Chào buổi tối!' }
 })
 
-function runAndClose(action: 'newConversation' | 'openSettings') {
+function runAndClose(action: 'newConversation' | 'openSettings' | 'toggleTheme') {
   menuOpen.value = false
   emit(action)
 }
@@ -48,23 +39,19 @@ function runAndClose(action: 'newConversation' | 'openSettings') {
 
 <template>
   <header class="chat-header">
-    <button class="chat-day" type="button" :aria-expanded="showFullDate" @click="showFullDate = !showFullDate">
-      <span class="i-solar:home-smile-outline" />
-      {{ showFullDate ? fullDate : 'Hôm nay' }}
-      <span class="i-solar:alt-arrow-down-linear chat-day-caret" :class="{ 'chat-day-caret--open': showFullDate }" />
-    </button>
-
-    <span class="chat-greeting">
-      <span aria-hidden="true">{{ greeting.emoji }}</span> {{ greeting.text }}
-    </span>
+    <div class="chat-title-group">
+      <span class="chat-brand">Mitsuka</span>
+      <span class="chat-greeting">
+        <span aria-hidden="true">{{ greeting.emoji }}</span> {{ greeting.text }}
+      </span>
+    </div>
 
     <div class="chat-header-actions">
       <IconButton
-        :icon="listening ? 'i-solar:soundwave-outline' : 'i-solar:microphone-3-outline'"
-        :label="listening ? 'Tắt lắng nghe' : 'Bật lắng nghe'"
-        :active="listening"
+        icon="i-solar:pen-new-square-outline"
+        label="Cuộc trò chuyện mới"
         size="sm"
-        @click="emit('toggleListening')"
+        @click="emit('newConversation')"
       />
       <IconButton
         :icon="dark ? 'i-solar:sun-outline' : 'i-solar:moon-outline'"
@@ -97,51 +84,46 @@ function runAndClose(action: 'newConversation' | 'openSettings') {
 <style scoped>
 .chat-header {
   display: flex;
-  overflow-x: auto;
   align-items: center;
+  justify-content: space-between;
   border-bottom: 1px solid var(--mk-border);
-  padding: 0.7rem 0.85rem;
+  padding: 0.65rem 0.85rem;
   gap: 0.5rem;
 }
 
-.chat-day {
-  display: inline-flex;
-  flex-shrink: 0;
+.chat-title-group {
+  display: flex;
   align-items: center;
-  border: 1px solid var(--mk-border);
-  border-radius: 999px;
-  background: var(--mk-raise);
-  color: var(--mk-ink-dim);
-  cursor: pointer;
-  padding: 0.3rem 0.6rem;
-  font: inherit;
-  font-size: 0.74rem;
-  font-weight: 700;
-  gap: 0.32rem;
-  white-space: nowrap;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
-.chat-day:hover { background: var(--mk-hover); }
-.chat-day-caret { font-size: 0.8rem; opacity: 0.7; transition: transform 160ms ease; }
-.chat-day-caret--open { transform: rotate(180deg); }
+.chat-brand {
+  font-weight: 700;
+  font-size: 0.88rem;
+  background: linear-gradient(135deg, var(--mk-pink, #f43f5e), var(--mk-purple, #a855f7));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
 
 .chat-greeting {
   border: 1px solid rgb(255 121 193 / 0.22);
   border-radius: 999px;
   background: rgb(255 111 181 / 0.12);
   color: var(--mk-pink-soft);
-  padding: 0.3rem 0.62rem;
-  font-size: 0.72rem;
-  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-header-actions {
   display: flex;
   flex-shrink: 0;
-  margin-left: auto;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.25rem;
 }
 
 .chat-menu { position: relative; }
@@ -178,11 +160,7 @@ function runAndClose(action: 'newConversation' | 'openSettings') {
 
 .chat-menu-pop button:hover { background: var(--mk-hover); color: var(--mk-ink); }
 
-@media (max-width: 1180px) {
+@media (max-width: 480px) {
   .chat-greeting { display: none; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-day-caret { transition: none; }
 }
 </style>

@@ -52,6 +52,8 @@ const time = computed(() => new Date(props.message.at).toLocaleTimeString('vi-VN
   max-width: 86%;
   border: 1px solid var(--mk-border);
   padding: 0.6rem 0.8rem 0.5rem;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .bubble--mitsuka {

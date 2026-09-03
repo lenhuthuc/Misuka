@@ -209,3 +209,16 @@ def test_empty_history_drops_the_note_rather_than_leading_with_it():
     messages = build_messages("hello", "ctx", [], history_char_budget=3000)
 
     assert messages == [{"role": "user", "content": "hello"}]
+
+
+def test_first_turn_keeps_persona_and_carries_server_derived_vad_policy():
+    messages = build_messages(
+        "mình đang rất căng thẳng",
+        "",
+        [],
+        response_policy_instruction="Response style: brief; calm; grounding.",
+    )
+
+    assert [message["role"] for message in messages] == ["user"]
+    assert "Hướng dẫn phản hồi nội bộ" in messages[0]["content"]
+    assert "Response style: brief; calm; grounding." in messages[0]["content"]

@@ -4,7 +4,7 @@ import { ref } from 'vue'
 
 import { useAudioContext, useSpeakingStore } from '../stores/audio'
 import { describeHttpFailure, parseChatStreamLine } from './local-conversation-sse'
-import { createTtsPlayer, extractSpeakableChunks, notifySpeechFinished } from './local-conversation-tts'
+import { createTtsPlayer, notifySpeechFinished } from './local-conversation-tts'
 
 export type LocalConvState = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
 
@@ -23,6 +23,21 @@ export interface UseLocalConversationOptions {
   onEmotion?: (emotion: EmotionVAD) => void
 }
 
+type CheckpointVAD = {
+  valence: number
+  arousal: number
+  dominance: number
+}
+
+/** Convert the emotion checkpoint's native [0, 1] scale to signed [-1, 1]. */
+function toSignedVad(vad: CheckpointVAD): CheckpointVAD {
+  return {
+    valence: vad.valence * 2 - 1,
+    arousal: vad.arousal * 2 - 1,
+    dominance: vad.dominance * 2 - 1,
+  }
+}
+
 /**
  * Full local conversation pipeline:
  *   User speaks → Sherpa STT → streaming RAG Chat → Piper, sentence by sentence
@@ -33,12 +48,9 @@ export interface UseLocalConversationOptions {
  * now spoken a sentence at a time, starting as soon as the first sentence
  * boundary arrives.
  *
- * The one invariant that keeps this correct is that `pendingSpeech` holds
- * every character of the reply that has not been handed to the player, and
- * nothing else is ever enqueued from — not `response`, not `reply.value`. The
- * previous sentence-splitting implementation spoke single-sentence replies
- * twice precisely because it enqueued the tail buffer *and* the full response
- * (see `local-conversation-tts.ts`).
+ * The server emits guarded complete sentences, so each delta is handed to Piper
+ * exactly once as it arrives. This avoids a client-side splitter delaying a
+ * final sentence until the stream has ended.
  *
  * Barge-in: calling onSpeechStart() aborts synthesis and playback immediately.
  */
@@ -114,21 +126,25 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
   }
 
   /** Run the shared Chat -> TTS half of a speech or typed turn. */
-  async function respond(text: string, abort: AbortController, myGeneration: number) {
+  async function respond(
+    text: string,
+    abort: AbortController,
+    myGeneration: number,
+    userVad?: CheckpointVAD,
+  ) {
     const superseded = () => myGeneration !== _generation || abort.signal.aborted
 
     transcript.value = text
     state.value = 'thinking'
 
     let response = ''
-    let pendingSpeech = ''
     let spokeAnything = false
 
     try {
       const r = await fetch(`${baseUrl}/v1/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: text }),
+        body: JSON.stringify({ query: text, ...(userVad ? { user_vad: toSignedVad(userVad) } : {}) }),
         signal: abort.signal,
       })
       if (!r.ok)
@@ -171,16 +187,10 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
 
           response += event.content
           reply.value = response
-          pendingSpeech += event.content
-          const [chunks, remaining] = extractSpeakableChunks(pendingSpeech)
-          pendingSpeech = remaining
-
-          for (const chunk of chunks) {
-            tts.enqueue(chunk, undefined, abort)
-            if (!spokeAnything) {
-              spokeAnything = true
-              state.value = 'speaking'
-            }
+          tts.enqueue(event.content, undefined, abort)
+          if (!spokeAnything) {
+            spokeAnything = true
+            state.value = 'speaking'
           }
         }
       }
@@ -203,13 +213,6 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     }
 
     reply.value = response.trim()
-    const tail = pendingSpeech.trim()
-    if (tail) {
-      tts.enqueue(tail, undefined, abort)
-      if (!spokeAnything)
-        state.value = 'speaking'
-    }
-
     await tts.drain()
     if (superseded())
       return
@@ -271,6 +274,7 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     form.append('language', language)
 
     let text = ''
+    let userVad: CheckpointVAD | undefined
     try {
       const r = await fetch(`${baseUrl}/emotion-vad`, {
         method: 'POST',
@@ -284,6 +288,7 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
         user_vad?: { valence: number, arousal: number, dominance: number }
       }
       text = (data.transcript ?? '').trim()
+      userVad = data.user_vad
       console.info('[localConv] transcript:', text, '| user VAD:', data.user_vad)
       // Notify caller so they can update the avatar expression. The field is
       // `user_vad` (VAD/schemas/vad.py) — this used to read a `fused` key that
@@ -324,14 +329,15 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     let response = ''
     // The reply's text that has not yet been handed to the TTS queue. Every
     // character leaves here exactly once — see this module's header.
-    let pendingSpeech = ''
     let spokeAnything = false
 
     try {
       const r = await fetch(`${baseUrl}/v1/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: text }),
+        // Forward the fused audio/text reading into the graph before it starts
+        // generation. The API's VAD policy uses the signed [-1, 1] scale.
+        body: JSON.stringify({ query: text, ...(userVad ? { user_vad: toSignedVad(userVad) } : {}) }),
         signal: abort.signal,
       })
       if (!r.ok)
@@ -368,10 +374,8 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
             continue
 
           if (event.type === 'done') {
-            // `event.agentVad` — the reply's own reading — is deliberately not
-            // used for speech: it only exists once the whole reply does, by
-            // which point every sentence has already been queued. The server
-            // reads each sentence's own emotion instead (`auto_prosody`).
+            // The complete-reply VAD arrives after all sentence deltas. It
+            // updates the agent state, but cannot hold up streaming Piper.
             streamDone = true
             break
           }
@@ -396,16 +400,10 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
           response += event.content
           reply.value = response
 
-          pendingSpeech += event.content
-          const [chunks, remaining] = extractSpeakableChunks(pendingSpeech)
-          pendingSpeech = remaining
-
-          for (const chunk of chunks) {
-            tts.enqueue(chunk, undefined, abort)
-            if (!spokeAnything) {
-              spokeAnything = true
-              state.value = 'speaking'
-            }
+          tts.enqueue(event.content, undefined, abort)
+          if (!spokeAnything) {
+            spokeAnything = true
+            state.value = 'speaking'
           }
         }
       }
@@ -429,21 +427,7 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     }
     reply.value = response.trim()
 
-    // ── 3. Speak whatever the last boundary left behind ──────────────────────
-    // The stream ends mid-buffer far more often than not: a reply whose final
-    // sentence ends in "." has no whitespace after it, so no boundary closed
-    // it. This is the whole of the unspoken remainder and the only place it is
-    // read — emptying it here is what makes speaking it twice impossible.
-    const tail = pendingSpeech.trim()
-    pendingSpeech = ''
-    if (tail) {
-      tts.enqueue(tail, undefined, abort)
-      if (!spokeAnything) {
-        spokeAnything = true
-        state.value = 'speaking'
-      }
-    }
-
+    // All guarded deltas were already queued as they arrived.
     await tts.drain()
 
     if (superseded())

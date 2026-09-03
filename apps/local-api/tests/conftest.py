@@ -24,6 +24,10 @@ if str(VAD_ROOT) not in sys.path:
 
 import main  # noqa: E402
 from brain.emotion_service import EmotionService  # noqa: E402
+from brain.graph import GraphConfig, GraphDeps, MitsukaGraph  # noqa: E402
+from brain.graph.backends import BackendRegistry, ChatBackend, CloudAvailability  # noqa: E402
+from brain.graph.backends.base import Generation, GenerationOptions, Usage  # noqa: E402
+from brain.graph.metrics import TurnMetrics  # noqa: E402
 from core.container import ServiceContainer  # noqa: E402
 from core.llm_priority import LLMPriorityGate  # noqa: E402
 from core.tasks import BackgroundTaskRegistry  # noqa: E402
@@ -76,11 +80,16 @@ class FakeCaptionService:
     """Stands in for `brain.caption_service.CaptionService`."""
 
     def __init__(self) -> None:
-        self.calls: list[np.ndarray] = []
+        self.calls: list[bytes] = []
+        self.frames: list[np.ndarray] = []
         self.caption_to_return = "a fake image caption"
 
-    async def caption(self, frame: np.ndarray) -> str:
-        self.calls.append(frame)
+    async def describe(self, image_bytes: bytes, session_id: str = "chat") -> str:
+        self.calls.append(image_bytes)
+        return self.caption_to_return
+
+    async def caption(self, frame: np.ndarray, session_id: str = "chat") -> str:
+        self.frames.append(frame)
         return self.caption_to_return
 
 
@@ -156,17 +165,44 @@ class FakeLLMService:
 class FakeMemoryService:
     def __init__(self) -> None:
         self.messages: list[dict] = []
+        self.session_states: dict[str, tuple[str, int]] = {}
 
-    async def get_recent(self, limit: int) -> list[dict]:
-        return self.messages[-limit:]
+    async def get_recent(self, limit: int, session_id: str = "default") -> list[dict]:
+        rows = [m for m in self.messages if m.get("session_id", "default") == session_id]
+        return rows[-limit:]
 
-    async def save_message(self, role: str, content: str, vad=None, emotion=None) -> None:
+    async def save_message(
+        self, role: str, content: str, vad=None, emotion=None,
+        session_id: str = "default",
+    ) -> None:
         # A timestamp is not incidental here: `prepare_turn` reads it to tell the
         # retriever which turns the history window already covers.
         self.messages.append({
             "role": role, "content": content, "vad": vad, "emotion": emotion,
             "timestamp": f"2026-08-09T00:00:{len(self.messages):02d}+00:00",
+            "session_id": session_id,
+            "id": len(self.messages) + 1,
         })
+
+    async def get_rolling_summary(self, session_id: str = "default") -> str:
+        return self.session_states.get(session_id, ("", 0))[0]
+
+    async def get_session_state(self, session_id: str = "default") -> tuple[str, int]:
+        return self.session_states.get(session_id, ("", 0))
+
+    async def set_rolling_summary(
+        self, summary: str, session_id: str = "default", summarized_through_id: int = 0,
+    ) -> None:
+        self.session_states[session_id] = (summary, summarized_through_id)
+
+    async def get_messages_between(
+        self, after_id: int, before_id: int, session_id: str = "default",
+    ) -> list[dict]:
+        return [
+            row for row in self.messages
+            if row.get("session_id", "default") == session_id
+            and after_id < row.get("id", 0) < before_id
+        ]
 
     async def close(self) -> None:
         pass
@@ -214,6 +250,58 @@ class FakeWebSearchService:
         return self.results, self.context
 
 
+class FakeChatBackend(ChatBackend):
+    """Graph backend adapter that keeps the pre-graph tests' call spies useful."""
+
+    name = "local"
+    supports_reasoning = True
+    model = "fake-local"
+
+    def __init__(self, llm: FakeLLMService) -> None:
+        self.llm = llm
+        self.streaming = False
+
+    def prepare(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
+        return messages
+
+    async def agenerate(
+        self, messages: list[dict[str, str]], options: GenerationOptions,
+    ) -> Generation:
+        text = await self.llm.chat(
+            messages,
+            options={"temperature": options.temperature, "num_predict": options.max_tokens},
+        )
+        return Generation(text=text, usage=Usage())
+
+    async def astream(
+        self, messages: list[dict[str, str]], options: GenerationOptions, usage: Usage,
+    ):
+        prepared = self.prepare(messages)
+        raw_options = {"temperature": options.temperature, "num_predict": options.max_tokens}
+        if self.streaming:
+            async for chunk in self.llm.stream_chat(prepared, options=raw_options):
+                yield chunk
+            return
+        yield await self.llm.chat(prepared, options=raw_options)
+
+
+class FakeMitsukaGraph(MitsukaGraph):
+    """Select the fake LLM's buffered/stream spy before running the real graph."""
+
+    def __init__(self, deps: GraphDeps, backend: FakeChatBackend) -> None:
+        super().__init__(deps)
+        self._fake_backend = backend
+
+    async def ainvoke(self, *args, **kwargs):
+        self._fake_backend.streaming = False
+        return await super().ainvoke(*args, **kwargs)
+
+    async def astream(self, *args, **kwargs):
+        self._fake_backend.streaming = True
+        async for event in super().astream(*args, **kwargs):
+            yield event
+
+
 class FakeBrainBundle:
     """Everything ServiceContainer.create() would normally build, plus
     handles for assertions. Override fields in a test with e.g.
@@ -245,6 +333,41 @@ class FakeBrainBundle:
         self.llm_gate = LLMPriorityGate()
 
     def build_container(self) -> ServiceContainer:
+        backend = FakeChatBackend(self.llm)
+        graph = FakeMitsukaGraph(
+            GraphDeps(
+                memory=self.memory,
+                rag=self.rag,
+                backends=BackendRegistry(
+                    local=backend,
+                    cloud=None,
+                    availability=CloudAvailability(),
+                    prefer_cloud=False,
+                ),
+                metrics=TurnMetrics(Path("logs/test-turns.jsonl"), enabled=False),
+                config=GraphConfig(
+                    history_turns=12,
+                    memory_recent_limit=18,
+                    memory_recent_char_budget=3000,
+                    temperature=self.llm.temperature,
+                    max_tokens=self.llm.max_tokens,
+                    reasoning_enabled=True,
+                    reasoning_activation_threshold=0.50,
+                    reasoning_min_tokens=64,
+                    reasoning_max_tokens=192,
+                    reasoning_token_scale=0.65,
+                    web_search_enabled=self.web_search_enabled,
+                    web_search_knowledge_enabled=self.web_search_knowledge_enabled,
+                    knowledge_temperature=0.30,
+                    knowledge_max_tokens=480,
+                ),
+                llm=self.llm,
+                web_search=self.web_search,
+                gate=self.llm_gate,
+                tasks=None,
+            ),
+            backend,
+        )
         return ServiceContainer(
             text_vad=self.text_vad,
             multimodal_vad=self.multimodal_vad,
@@ -277,6 +400,7 @@ class FakeBrainBundle:
             emotion_executor=ThreadPoolExecutor(max_workers=2),
             tasks=BackgroundTaskRegistry(),
             llm_gate=self.llm_gate,
+            graph=graph,
         )
 
 

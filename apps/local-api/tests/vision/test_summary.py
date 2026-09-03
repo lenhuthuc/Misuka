@@ -1,4 +1,4 @@
-"""Tags, label/value pairs and the fast summary, over the real fixture layouts."""
+"""Tags, pairs and both summaries, over the real fixture layouts."""
 from __future__ import annotations
 
 from tests.vision.fixtures import INVOICE, STREET, TASK_MANAGER
@@ -9,6 +9,8 @@ from vision.summary import (
     TAG_SCENE,
     TAG_SCREENSHOT,
     TAG_UNKNOWN,
+    NOTHING_RECOGNISED,
+    build_chat_summary,
     build_fast_summary,
     build_ocr_pairs,
     build_tags,
@@ -217,3 +219,52 @@ def test_reading_order_is_top_down_then_left_right():
     ]
 
     assert [it["text"] for it in sort_reading_order(items)] == ["a", "b", "c"]
+
+
+# -- chat summary ------------------------------------------------------------
+# `build_chat_summary` is what the chat model reads. It exists because the
+# router's shorthand does not survive contact with a 1.7B model; see the
+# docstring there.
+
+
+def test_chat_summary_says_the_objects_as_a_sentence():
+    summary = build_chat_summary([TAG_SCENE], [{"label": "cat", "score": 0.85}], [], [], COCO_TO_VI)
+
+    assert summary == "Trong ảnh có một con mèo."
+
+
+def test_chat_summary_drops_incidental_text_from_a_photo():
+    """@example: the "Fago Pet" watermark on a stock cat photo. Quoting it into
+    the context is what made Mitsuka ask the user about Fago Pet instead of
+    remarking on the cat."""
+    watermark = [{"text": "Fago Pet", "score": 0.79, "box": [600.0, 20.0, 150.0, 40.0]}]
+
+    summary = build_chat_summary([TAG_SCENE], [{"label": "cat", "score": 0.85}], watermark, [], COCO_TO_VI)
+
+    assert "Fago Pet" not in summary
+    assert summary == "Trong ảnh có một con mèo."
+
+
+def test_chat_summary_keeps_the_text_when_the_image_is_text():
+    """The mirror of the case above: on a screenshot the words *are* the
+    content, so dropping them would leave nothing to answer from."""
+    ocr = [{"text": "Cores: 12", "score": 0.9, "box": [0.0, 0.0, 100.0, 20.0]}]
+
+    summary = build_chat_summary([TAG_SCREENSHOT], [], ocr, [], COCO_TO_VI)
+
+    assert summary.startswith("Đây là ảnh chụp màn hình.")
+    assert "Cores: 12" in summary
+
+
+def test_chat_summary_counts_and_joins_several_kinds():
+    detections = [d for d in STREET.detections if d["score"] >= 0.5]
+
+    summary = build_chat_summary([TAG_PEOPLE], detections, [], [], COCO_TO_VI)
+
+    assert summary == "Trong ảnh có 3 người, 2 xe máy và một ô tô."
+
+
+def test_chat_summary_says_so_rather_than_returning_nothing():
+    """"" is the caller's signal that captioning is unavailable, so an image
+    the models found nothing in must not borrow it."""
+    assert build_chat_summary([TAG_UNKNOWN], [], [], [], COCO_TO_VI) == NOTHING_RECOGNISED

@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 # string, and the model should know which is which before trusting either.
 _WEB_CONTEXT_HEADER = "Kết quả tìm kiếm internet (có thể chưa hoàn toàn cập nhật):"
 
+# The graph's rolling summary of what has already fallen out of the verbatim
+# history window. It goes in the same `context` string as retrieval, under the
+# same untrusted-span header, and that is deliberate: the summary is written by
+# a model out of the user's own words, so an instruction smuggled into a turn
+# would otherwise come back through the summariser wearing the app's voice.
+_SUMMARY_HEADER = "Tóm tắt phần trò chuyện trước đó:"
+
 if TYPE_CHECKING:
     from brain.memory_service import MemoryService
     from brain.rag_service import RAGService
@@ -77,6 +84,8 @@ async def prepare_turn(
     knowledge_temperature: float = 0.30,
     knowledge_max_tokens: int = 480,
     on_web_search_error: Callable[[Exception], None] | None = None,
+    session_id: str = "default",
+    rolling_summary: str = "",
 ) -> TurnContext:
     """Run the RAG-decision + retrieval + message-building steps shared by
     every chat turn.
@@ -93,7 +102,7 @@ async def prepare_turn(
     context = ""
     evidence = RetrievalEvidence()
 
-    recent = await memory.get_recent(recent_limit)
+    recent = await memory.get_recent(recent_limit, session_id=session_id)
     filter_history = getattr(memory, "filter_repetitive_history", None)
     if filter_history is not None:
         recent = filter_history(recent)
@@ -147,6 +156,13 @@ async def prepare_turn(
                 on_web_search_error(exc)
     if web_context:
         context = f"{context}\n\n{_WEB_CONTEXT_HEADER}\n{web_context}" if context else f"{_WEB_CONTEXT_HEADER}\n{web_context}"
+
+    # Last in the context block, nearest the question: it is the least specific
+    # material here, and putting it in front would push retrieval further from
+    # the turn it was fetched for.
+    if rolling_summary.strip():
+        summary_block = f"{_SUMMARY_HEADER}\n{rolling_summary.strip()}"
+        context = f"{context}\n\n{summary_block}" if context else summary_block
 
     reasoning = derive_reasoning_policy(
         query,

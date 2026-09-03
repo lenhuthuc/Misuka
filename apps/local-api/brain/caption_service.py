@@ -1,129 +1,75 @@
-"""VLM captioning service — tries moondream2, then Florence-2, then placeholder."""
+"""Image -> Vietnamese text, on top of the `vision/` pipeline.
+
+The chat model is text-only, so an attached image only ever reaches it as
+words. Those words come from `vision.VisionPipeline` -- the YOLO11n + RapidOCR
++ CLIP fast path whose exported graphs already sit in `assets/models/vision/`
+-- phrased by `build_chat_summary` into the one Vietnamese sentence a chat
+model can answer from. Nothing here downloads a model.
+
+Ingesting also parks the image in the pipeline's per-session buffer, so a
+follow-up question about it can later be answered by `VisionPipeline.answer()`
+off the extracted text, without the image being sent again. See
+`vision/README.md`.
+"""
 from __future__ import annotations
 
-import asyncio
+import io
 import logging
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+from vision.config import COCO_TO_VI
+from vision.summary import build_chat_summary
+
+if TYPE_CHECKING:
+    from vision import VisionPipeline
+
 logger = logging.getLogger(__name__)
 
-_MOONDREAM_REPO = "vikhyatk/moondream2"
-_MOONDREAM_REV  = "2025-01-09"
-_FLORENCE_REPO  = "microsoft/Florence-2-base"
-_CAPTION_PROMPT = "Describe this image briefly."
-
-
-class ImageDecodeError(ValueError):
-    """Raised by `decode_image_to_bgr` when the bytes are not a readable image."""
-
-
-def decode_image_to_bgr(data: bytes) -> np.ndarray:
-    """Decode an uploaded image file into the BGR uint8 array `caption()` expects.
-
-    `caption()`'s frame contract mirrors `cv2.VideoCapture`/`cv2.imread` (BGR
-    channel order), which is what `vision_capture.py`'s webcam/screen path
-    already hands it. A one-off image upload has no OpenCV frame to begin
-    with, so this decodes via Pillow instead and flips RGB -> BGR to land on
-    the exact same contract, rather than adding an `cv2.imdecode` path (and
-    its `opencv-python` dependency) for what Pillow already reads.
-    """
-    from io import BytesIO
-
-    from PIL import Image, UnidentifiedImageError
-
-    try:
-        with Image.open(BytesIO(data)) as img:
-            rgb = np.array(img.convert("RGB"))
-    except UnidentifiedImageError as exc:
-        raise ImageDecodeError(f"Not a readable image: {exc}") from exc
-
-    return rgb[:, :, ::-1]
+# The frontend does not send a conversation id yet, so every upload lands in
+# one buffer slot -- which is also what makes "ảnh vừa gửi" resolve to the
+# newest image if `answer()` is ever wired up.
+DEFAULT_SESSION_ID = "chat"
 
 
 class CaptionService:
-    """Load a VLM once, call caption() per frame."""
+    """Describes a frame, or an uploaded file, through one shared pipeline."""
 
-    def __init__(self) -> None:
-        self._backend: str = "placeholder"
-        self._model = None
-        self._processor = None
-        self._load_vlm()
+    def __init__(self, pipeline: VisionPipeline | None = None) -> None:
+        if pipeline is None:
+            from vision import VisionPipeline as _VisionPipeline
 
-    def _load_vlm(self) -> None:
-        # ── Try moondream2 ────────────────────────────────────────────────────
-        try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-            self._processor = AutoTokenizer.from_pretrained(
-                _MOONDREAM_REPO, revision=_MOONDREAM_REV, trust_remote_code=True
-            )
-            self._model = AutoModelForCausalLM.from_pretrained(
-                _MOONDREAM_REPO, revision=_MOONDREAM_REV, trust_remote_code=True
-            )
-            self._model.eval()
-            self._backend = "moondream2"
-            logger.info("CaptionService: using moondream2")
-            return
-        except Exception as exc:
-            logger.warning("moondream2 load failed: %s", exc)
+            pipeline = _VisionPipeline.build_default()
+        self._pipeline = pipeline
 
-        # ── Try Florence-2 ────────────────────────────────────────────────────
-        try:
-            from transformers import AutoModelForCausalLM, AutoProcessor
-            self._processor = AutoProcessor.from_pretrained(
-                _FLORENCE_REPO, trust_remote_code=True
-            )
-            self._model = AutoModelForCausalLM.from_pretrained(
-                _FLORENCE_REPO, trust_remote_code=True
-            )
-            self._model.eval()
-            self._backend = "florence2"
-            logger.info("CaptionService: using Florence-2")
-            return
-        except Exception as exc:
-            logger.warning("Florence-2 load failed: %s", exc)
+    @property
+    def pipeline(self) -> VisionPipeline:
+        """The underlying pipeline, for callers that want `answer()` too."""
+        return self._pipeline
 
-        logger.warning("CaptionService: no VLM available, captions will be empty")
+    async def describe(self, image_bytes: bytes, session_id: str = DEFAULT_SESSION_ID) -> str:
+        """Caption an encoded image file (PNG/JPEG/...) -- the upload path.
 
-    # ── public API ────────────────────────────────────────────────────────────
+        `build_chat_summary`, not the record's own `fast_summary`: what comes
+        back here is read by the chat model, which answers a sentence far
+        better than it answers the router's tagged shorthand.
+        """
+        record = await self._pipeline.ingest(image_bytes, session_id=session_id)
+        return build_chat_summary(
+            record.tags, record.detections, record.ocr, record.ocr_pairs, COCO_TO_VI
+        )
 
-    async def caption(self, frame: np.ndarray) -> str:
-        """Return caption for BGR uint8 frame (async, runs in executor)."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._caption_sync, frame)
+    async def caption(self, frame: np.ndarray, session_id: str = DEFAULT_SESSION_ID) -> str:
+        """Caption a BGR uint8 frame -- the cv2 contract `vision_capture.py` yields.
 
-    def _caption_sync(self, frame: np.ndarray) -> str:
-        if self._backend == "placeholder" or self._model is None:
-            return ""
-
+        `ingest()` takes encoded bytes because that is what every other caller
+        already has, so a webcam frame is re-encoded here (PNG: lossless, and
+        the cost is milliseconds against a multi-second ingest) rather than
+        opening a second entry point into the pipeline.
+        """
         from PIL import Image
-        # OpenCV BGR → RGB PIL image
-        rgb = frame[:, :, ::-1]
-        pil_img = Image.fromarray(rgb)
 
-        try:
-            if self._backend == "moondream2":
-                enc = self._processor(pil_img, return_tensors="pt")
-                result = self._model.answer_question(
-                    enc["input_ids"],
-                    _CAPTION_PROMPT,
-                    tokenizer=self._processor,
-                )
-                return result.strip()
-
-            if self._backend == "florence2":
-                task = "<CAPTION>"
-                inputs = self._processor(
-                    text=task, images=pil_img, return_tensors="pt"
-                )
-                output = self._model.generate(
-                    input_ids=inputs["input_ids"],
-                    pixel_values=inputs["pixel_values"],
-                    max_new_tokens=128,
-                )
-                decoded = self._processor.batch_decode(output, skip_special_tokens=True)[0]
-                return decoded.strip()
-        except Exception as exc:
-            logger.warning("Caption failed (%s): %s", self._backend, exc)
-
-        return ""
+        buffer = io.BytesIO()
+        Image.fromarray(np.ascontiguousarray(frame[:, :, ::-1])).save(buffer, format="PNG")
+        return await self.describe(buffer.getvalue(), session_id=session_id)

@@ -31,20 +31,29 @@ defineEmits<{ (e: 'pick', action: QuickAction): void }>()
 <style scoped>
 .quick-actions {
   display: flex;
-  flex-wrap: wrap;
-  padding: 0 0.95rem 0.6rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 0 0.95rem 0.5rem;
   gap: 0.4rem;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.quick-actions::-webkit-scrollbar {
+  display: none;
 }
 
 .quick-chip {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   border: 1px solid var(--mk-border);
   border-radius: 999px;
   background: var(--mk-raise);
   color: var(--mk-ink-dim);
   cursor: pointer;
-  padding: 0.34rem 0.7rem;
+  padding: 0.32rem 0.65rem;
   font: inherit;
   font-size: 0.72rem;
   font-weight: 600;
@@ -59,6 +68,12 @@ defineEmits<{ (e: 'pick', action: QuickAction): void }>()
 }
 
 .quick-chip:disabled { cursor: default; opacity: 0.4; }
+
+@media (max-width: 768px) {
+  .quick-actions {
+    padding: 0 0.5rem 0.4rem;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .quick-chip { transition: none; }

@@ -238,10 +238,14 @@ no final activation); scores are clamped and checked for NaN/Inf in
 ## Vision captioning (chat image attachments)
 The chat model (Qwen, via Ollama) is text-only and never receives pixels — an image attached in
 the Mitsuka UI reaches it only as words. `POST /v1/vision/caption`
-([apps/local-api/api/vision.py](apps/local-api/api/vision.py)) decodes the upload and runs it
-through `CaptionService` ([apps/local-api/brain/caption_service.py](apps/local-api/brain/caption_service.py):
-moondream2, then Florence-2, then a placeholder that returns `""`), which downloads its weights
-from Hugging Face on first use. The frontend (`apps/stage-web/src/pages/index.vue`'s `send()`)
+([apps/local-api/api/vision.py](apps/local-api/api/vision.py)) hands the upload to
+`CaptionService` ([apps/local-api/brain/caption_service.py](apps/local-api/brain/caption_service.py)),
+a thin adapter over the `vision/` pipeline ([apps/local-api/vision/README.md](apps/local-api/vision/README.md)):
+YOLO11n + RapidOCR + CLIP run over the image and its Vietnamese `fast_summary` — the objects
+found and the text read — is what comes back as the caption. Local ONNX graphs from
+`assets/models/vision/`, nothing downloaded at runtime. The image also stays in the pipeline's
+per-session buffer, so `VisionPipeline.answer()` could later answer questions about it without a
+re-upload; the chat path does not use that yet. The frontend (`apps/stage-web/src/pages/index.vue`'s `send()`)
 calls this first when a message has an attached image, folds the returned description into the
 text sent to `/v1/chat/stream`, but keeps the *displayed* chat bubble to just what the user typed
 (or nothing) plus the image itself — the auto-generated description is context for Mitsuka, never
@@ -344,7 +348,7 @@ python main.py   # http://127.0.0.1:8010 — Sherpa always runs on CPU/int8;
 | [apps/local-api/brain/config.py](apps/local-api/brain/config.py) | All tunables (Ollama model, Qdrant, model paths, logging, CORS) |
 | [apps/local-api/core/llm_priority.py](apps/local-api/core/llm_priority.py) | Keeps background LLM work off the runner for the whole user turn, playback included |
 | [apps/local-api/tests/conftest.py](apps/local-api/tests/conftest.py) | Fake service fixtures — read this before adding a new test |
-| [apps/local-api/brain/caption_service.py](apps/local-api/brain/caption_service.py) | VLM image captioning (moondream2/Florence-2) — how an attached image reaches the text-only chat model |
+| [apps/local-api/brain/caption_service.py](apps/local-api/brain/caption_service.py) | Image → Vietnamese text via the `vision/` pipeline — how an attached image reaches the text-only chat model |
 | [airi/packages/stage-ui/src/composables/local-conversation.ts](airi/packages/stage-ui/src/composables/local-conversation.ts) | The turn pipeline: STT → SSE chat → one spoken utterance |
 | [airi/packages/stage-ui-live2d/src/composables/live2d/emotion-vad.ts](airi/packages/stage-ui-live2d/src/composables/live2d/emotion-vad.ts) | V/A/D → Live2D parameter mapping (edit here to tune the avatar's acting) |
 | [airi/packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts](airi/packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts) | Per-frame plugin pipeline: blink, emotion, lip sync |

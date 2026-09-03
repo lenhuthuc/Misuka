@@ -68,7 +68,7 @@ async def test_caption():
     from brain.caption_service import CaptionService
 
     svc = CaptionService()
-    print(f"  Backend loaded: {svc._backend}")
+    print("  Backend: vision/ pipeline (YOLO11n + RapidOCR + CLIP)")
 
     # Tạo ảnh giả: gradient BGR 480x640
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -76,14 +76,13 @@ async def test_caption():
 
     caption = await svc.caption(frame)
 
-    if svc._backend == "placeholder":
-        print(f"  [SKIP] No VLM installed — caption returned: {repr(caption)}")
-        print("         Để dùng VLM thật: pip install transformers accelerate")
-        print("         moondream2 sẽ tự download khi CaptionService() được khởi tạo")
+    if not caption:
+        print(f"  [SKIP] Caption rỗng — kiểm tra assets/models/vision/ đã export chưa")
+        print("         (python scripts/export_models.py)")
     else:
         print(f"  [PASS] caption: {repr(caption)}")
 
-    # Luôn pass vì placeholder trả về "" là đúng
+    # Ảnh gradient không có vật thể lẫn chữ, nên "" cũng là kết quả hợp lệ
     print(f"  [PASS] caption() called without error")
 
 

@@ -112,7 +112,7 @@ describe('describeHttpFailure', () => {
 })
 
 describe('speechRequestBody', () => {
-  it('asks the server to derive prosody when the caller has no reading', () => {
+  it('does not wait for text-VAD prosody when the caller has no reading', () => {
     // A sentence spoken mid-stream never has one: the reply's own V/A/D is
     // only inferred once the whole reply exists, which is after every sentence
     // of it has already been queued. Without this the reply would be spoken in
@@ -120,7 +120,7 @@ describe('speechRequestBody', () => {
     expect(speechRequestBody('Xin chào bạn.')).toEqual({
       input: 'Xin chào bạn.',
       voice: 'default',
-      auto_prosody: true,
+      auto_prosody: false,
     })
   })
 

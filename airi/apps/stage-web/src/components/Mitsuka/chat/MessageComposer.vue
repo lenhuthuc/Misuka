@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { BasicInputFile } from '@proj-airi/ui'
 import { onClickOutside, useObjectUrl } from '@vueuse/core'
 import { nextTick, ref, shallowRef, watch } from 'vue'
 
@@ -29,16 +28,22 @@ onClickOutside(emojiPanel, () => {
   emojiOpen.value = false
 })
 
-// `BasicInputFile` always assigns a fresh array on pick, so this fires even
-// when the same file is re-picked after being removed.
-const pickedImages = ref<File[]>([])
+const fileInput = ref<HTMLInputElement | null>(null)
 const attachedImage = shallowRef<File>()
 const attachedImageUrl = useObjectUrl(attachedImage)
 
-watch(pickedImages, (files) => {
-  if (files?.[0])
-    attachedImage.value = files[0]
-})
+// A plain input driven by `fileInput.click()`, not `BasicInputFile`: that
+// component wraps its slot in a <label>, and a <label> deliberately does not
+// forward clicks that land on interactive content — our attach button — to
+// its control, so the file dialog never opened.
+function pickImage(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file)
+    attachedImage.value = file
+  // Let the same file be re-picked after it was removed.
+  input.value = ''
+}
 
 function removeAttachedImage() {
   attachedImage.value = undefined
@@ -72,10 +77,6 @@ function insert(text: string) {
 function pickEmoji(emoji: string) {
   insert(emoji)
   emojiOpen.value = false
-}
-
-function insertCodeBlock() {
-  insert('\n```\n\n```\n')
 }
 
 function submit() {
@@ -119,6 +120,22 @@ function submit() {
 
     <div class="composer-bar">
       <div class="composer-tools">
+        <input
+          ref="fileInput"
+          class="composer-file"
+          type="file"
+          accept="image/*"
+          tabindex="-1"
+          aria-hidden="true"
+          @change="pickImage"
+        >
+        <IconButton
+          icon="i-solar:gallery-add-outline"
+          label="Đính kèm ảnh"
+          size="sm"
+          @click="fileInput?.click()"
+        />
+
         <div ref="emojiPanel" class="composer-emoji">
           <IconButton
             icon="i-solar:smile-circle-outline"
@@ -141,17 +158,6 @@ function submit() {
         </div>
 
         <IconButton
-          icon="i-solar:code-square-outline"
-          label="Chèn khối mã"
-          size="sm"
-          @click="insertCodeBlock"
-        />
-
-        <BasicInputFile v-model="pickedImages" accept="image/*">
-          <IconButton icon="i-solar:gallery-add-outline" label="Đính kèm ảnh" size="sm" />
-        </BasicInputFile>
-
-        <IconButton
           :icon="listening ? 'i-solar:microphone-3-bold' : 'i-solar:microphone-3-outline'"
           :label="listening ? 'Tắt lắng nghe' : 'Bật lắng nghe'"
           :active="listening"
@@ -165,14 +171,13 @@ function submit() {
         <span v-else class="i-solar:plain-2-outline" />
       </button>
     </div>
-
-    <span class="composer-spark" aria-hidden="true">✦</span>
   </form>
 </template>
 
 <style scoped>
 .composer {
   position: relative;
+  flex-shrink: 0;
   margin: 0 0.95rem 0.95rem;
   border: 1px solid var(--mk-border);
   border-radius: var(--mk-radius);
@@ -226,8 +231,25 @@ function submit() {
   color: var(--mk-ink);
   resize: none;
   font: inherit;
-  font-size: 0.83rem;
+  font-size: 0.88rem;
   line-height: 1.5;
+}
+
+@media (max-width: 860px) {
+  .composer {
+    margin: 0 0.5rem 0.5rem;
+    padding: 0.5rem 0.6rem 0.4rem;
+  }
+
+  .composer textarea {
+    font-size: 16px; /* Prevents auto-zoom in iOS Safari */
+    min-height: 1.4rem;
+  }
+
+  .composer-send {
+    width: 2.15rem;
+    height: 2.15rem;
+  }
 }
 
 .composer textarea::placeholder { color: var(--mk-muted); }
@@ -241,6 +263,16 @@ function submit() {
 }
 
 .composer-tools { display: flex; align-items: center; gap: 0.3rem; }
+
+/* Hidden without `display: none`, which some browsers refuse to click(). */
+.composer-file {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .composer-emoji { position: relative; }
 
 .emoji-pop {
@@ -289,16 +321,6 @@ function submit() {
 
 .composer-send:hover:not(:disabled) { transform: translateY(-1px); }
 .composer-send:disabled { cursor: default; opacity: 0.35; }
-
-.composer-spark {
-  position: absolute;
-  top: 0.45rem;
-  right: 0.6rem;
-  color: var(--mk-pink);
-  font-size: 0.7rem;
-  opacity: 0.5;
-  pointer-events: none;
-}
 
 @media (prefers-reduced-motion: reduce) {
   .composer, .composer-send { transition: none; }

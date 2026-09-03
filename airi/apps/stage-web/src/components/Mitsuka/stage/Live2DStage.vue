@@ -1,59 +1,55 @@
 <script setup lang="ts">
-import type { BackgroundItem } from '@proj-airi/stage-layouts/stores/background'
-import type { LocalConvState } from '@proj-airi/stage-ui/composables/local-conversation'
-import type { EmotionState } from '@proj-airi/stage-ui/stores/modules/emotion'
+import type { EmotionPayload } from '@proj-airi/stage-ui/constants/emotions'
 
 import { ViewControlSlider, WidgetStage } from '@proj-airi/stage-ui/components/scenes'
-import { computed, useTemplateRef } from 'vue'
+import { computed } from 'vue'
 
 import CharacterController from './CharacterController.vue'
-import SceneBackground from './SceneBackground.vue'
 import SceneOverlay from './SceneOverlay.vue'
 
-const props = defineProps<{
-  background: BackgroundItem
-  topColor?: string
-  cursorPosition: { x: number, y: number }
-  enableOrbitControls: boolean
-  paused: boolean
-  listening: boolean
-  viewControls: boolean
-  fullscreen: boolean
-  live2d: boolean
-  state: LocalConvState
-  emotion: EmotionState
-}>()
+const props = withDefaults(defineProps<{
+  state?: 'pending' | 'loading' | 'mounted'
+  cursorPosition?: { x: number, y: number }
+  enableOrbitControls?: boolean
+  paused?: boolean
+  viewControls?: boolean
+  fullscreen?: boolean
+  live2d?: boolean
+  emotion?: EmotionPayload
+}>(), {
+  cursorPosition: () => ({ x: 0, y: 0 }),
+  enableOrbitControls: true,
+  paused: false,
+  viewControls: false,
+  fullscreen: false,
+  live2d: true,
+  state: 'pending',
+})
 
 defineEmits<{
-  (e: 'toggleListening' | 'togglePaused' | 'toggleViewControls' | 'toggleFullscreen' | 'pickBackground' | 'openSettings'): void
+  (e: 'togglePaused'): void
+  (e: 'toggleViewControls'): void
+  (e: 'toggleFullscreen'): void
+  (e: 'pickBackground'): void
+  (e: 'openSettings'): void
 }>()
 
-const scene = useTemplateRef<InstanceType<typeof SceneBackground>>('scene')
-
-// Live2D models are anchored differently from VRM/Spine ones, so the slider
-// column sits higher for them — same rule the previous stage page used.
-const viewControlClass = computed(() => props.live2d ? 'stage-view-controls--live2d' : '')
-
-defineExpose({
-  get surfaceEl() {
-    return scene.value?.surfaceEl
-  },
+const viewControlClass = computed(() => {
+  return props.live2d ? 'stage-view-controls--live2d' : 'stage-view-controls--three'
 })
 </script>
 
 <template>
   <section class="live2d-stage" aria-label="Sân khấu Mitsuka">
-    <SceneBackground ref="scene" :background="background" :top-color="topColor">
-      <div class="stage-canvas">
-        <WidgetStage
-          h-full
-          w-full
-          :cursor-position="cursorPosition"
-          :enable-orbit-controls="enableOrbitControls"
-          :paused="paused"
-        />
-      </div>
-    </SceneBackground>
+    <div class="stage-canvas">
+      <WidgetStage
+        h-full
+        w-full
+        :cursor-position="cursorPosition"
+        :enable-orbit-controls="enableOrbitControls"
+        :paused="paused"
+      />
+    </div>
 
     <div class="stage-hud stage-hud--top">
       <CharacterController :state="state" :emotion="emotion" />
@@ -65,16 +61,11 @@ defineExpose({
 
     <div class="stage-hud stage-hud--bottom">
       <SceneOverlay
-        :listening="listening"
         :paused="paused"
-        :view-controls="viewControls"
         :fullscreen="fullscreen"
-        @toggle-listening="$emit('toggleListening')"
         @toggle-paused="$emit('togglePaused')"
-        @toggle-view-controls="$emit('toggleViewControls')"
         @toggle-fullscreen="$emit('toggleFullscreen')"
         @pick-background="$emit('pickBackground')"
-        @open-settings="$emit('openSettings')"
       />
     </div>
   </section>
@@ -84,15 +75,19 @@ defineExpose({
 .live2d-stage {
   position: relative;
   overflow: hidden;
-  min-height: 0;
   height: 100%;
-  border: 1px solid var(--mk-border);
-  border-radius: var(--mk-radius-lg);
-  background: var(--mk-panel-solid);
-  box-shadow: var(--mk-shadow);
+  width: 100%;
 }
 
-.stage-canvas { height: 100%; width: 100%; }
+.stage-canvas {
+  height: 100%;
+  width: 100%;
+}
+
+/* Hide duplicate background inside WidgetStage so canvas stays 100% transparent */
+.stage-canvas :deep(.absolute.left-0.top-0.z-0) {
+  display: none !important;
+}
 
 .stage-hud {
   position: absolute;
@@ -103,12 +98,14 @@ defineExpose({
 
 .stage-hud > * { pointer-events: auto; }
 
-.stage-hud--top { top: 0.85rem; left: 0.85rem; }
+.stage-hud--top {
+  top: 1.2rem;
+  left: 4.2rem;
+}
 
 .stage-hud--bottom {
-  bottom: 0.85rem;
-  left: 50%;
-  transform: translateX(-50%);
+  bottom: 1.2rem;
+  left: 1.2rem;
 }
 
 .stage-view-controls {
@@ -125,8 +122,18 @@ defineExpose({
   transform: none;
 }
 
-@media (max-width: 900px) {
-  .live2d-stage { min-height: 15rem; }
+@media (max-width: 860px) {
   .stage-view-controls { display: none; }
+
+  .stage-hud--top {
+    top: 0.5rem;
+    left: 0.6rem;
+  }
+
+  .stage-hud--bottom {
+    bottom: 0.5rem;
+    right: 0.6rem;
+    left: auto;
+  }
 }
 </style>

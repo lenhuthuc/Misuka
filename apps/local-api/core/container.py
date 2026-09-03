@@ -15,6 +15,11 @@ from typing import TYPE_CHECKING
 
 from brain.caption_service import CaptionService
 from brain.emotion_service import EmotionService
+from brain.graph import GraphConfig, GraphDeps, MitsukaGraph
+from brain.graph.backends import BackendRegistry, CloudAvailability, CloudBackend, LocalBackend
+from brain.graph.guard import GuardConfig
+from brain.graph.metrics import TurnMetrics
+from brain.graph.prompts import warn_on_persona_drift
 from core.llm_priority import LLMPriorityGate
 from core.tasks import BackgroundTaskRegistry
 from model.multimodal_vad import load_multimodal_vad
@@ -34,6 +39,98 @@ if TYPE_CHECKING:
     from brain.web_search_service import WebSearchService
 
 logger = logging.getLogger(__name__)
+
+
+def build_conversation_graph(
+    settings: "Settings",
+    *,
+    llm: "LLMService",
+    memory: "MemoryService",
+    rag: "RAGService",
+    web_search: "WebSearchService",
+    gate: LLMPriorityGate,
+    tasks: BackgroundTaskRegistry,
+) -> MitsukaGraph:
+    """Assemble the LangGraph turn pipeline from settings.
+
+    Kept a module-level function rather than inlined in `create` so the demo
+    script in `scripts/` can build the same graph over the same settings
+    without standing up ASR, TTS and three ONNX models to do it.
+    """
+    local = LocalBackend(
+        base_url=settings.ollama_base_url,
+        model=settings.ollama_model,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+    )
+    cloud: CloudBackend | None = None
+    if settings.cloud_enabled and settings.gemini_api_key:
+        cloud = CloudBackend(
+            api_key=settings.gemini_api_key,
+            model=settings.gemini_model,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            timeout=settings.cloud_timeout_seconds,
+            max_retries=settings.cloud_max_retries,
+        )
+        # Only meaningful when a cloud backend exists: it is the one that sends
+        # the persona as text, so it is the one drift can silence.
+        warn_on_persona_drift()
+    else:
+        logger.info(
+            "conversation graph | cloud backend disabled (%s)",
+            "no GEMINI_API_KEY" if settings.cloud_enabled else "cloud_enabled=false",
+        )
+
+    registry = BackendRegistry(
+        local=local,
+        cloud=cloud,
+        availability=CloudAvailability(
+            transient_cooldown_seconds=settings.cloud_transient_cooldown_seconds,
+            quota_reset_timezone=settings.cloud_quota_reset_timezone,
+        ),
+        prefer_cloud=settings.cloud_enabled,
+    )
+
+    config = GraphConfig(
+        history_turns=settings.graph_history_turns,
+        summary_max_tokens=settings.graph_summary_max_tokens,
+        summary_defer_timeout=settings.graph_summary_defer_timeout,
+        memory_recent_limit=settings.memory_recent_limit,
+        memory_recent_char_budget=settings.memory_recent_char_budget,
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_tokens,
+        reasoning_enabled=settings.reasoning_enabled,
+        reasoning_activation_threshold=settings.reasoning_activation_threshold,
+        reasoning_min_tokens=settings.reasoning_min_tokens,
+        reasoning_max_tokens=settings.reasoning_max_tokens,
+        reasoning_token_scale=settings.reasoning_token_scale,
+        web_search_enabled=settings.web_search_enabled,
+        web_search_knowledge_enabled=settings.web_search_knowledge_enabled,
+        knowledge_temperature=settings.knowledge_temperature,
+        knowledge_max_tokens=settings.knowledge_max_tokens,
+        guard=GuardConfig(
+            max_sentences=settings.guard_max_sentences,
+            max_chars=settings.guard_max_chars,
+            previous_turn_similarity=settings.guard_previous_turn_similarity,
+        ),
+        max_regenerations=settings.graph_max_regenerations,
+    )
+
+    deps = GraphDeps(
+        memory=memory,
+        rag=rag,
+        backends=registry,
+        metrics=TurnMetrics(
+            settings.turn_metrics_path, enabled=settings.turn_metrics_enabled
+        ),
+        config=config,
+        llm=llm,
+        web_search=web_search,
+        gate=gate,
+        tasks=tasks,
+    )
+    return MitsukaGraph(deps)
 
 
 @dataclass
@@ -71,6 +168,10 @@ class ServiceContainer:
     emotion_executor: ThreadPoolExecutor
     tasks: BackgroundTaskRegistry
     llm_gate: LLMPriorityGate
+    # The LangGraph turn pipeline. Both chat endpoints run through this; `llm`
+    # above is still here because the graph's local backend is not the only
+    # caller of Ollama (captioning and the deliberation pass use it directly).
+    graph: MitsukaGraph
     # How long the exchange-indexing task waits for the reply to finish being
     # spoken before giving up on the signal and embedding anyway.
     index_defer_timeout: float = 90.0
@@ -102,6 +203,11 @@ class ServiceContainer:
         emotion_pipeline = EmotionPipeline(asr, multimodal_vad, text_vad)
 
         tts = TTSService(settings.piper_models_dir)
+        # Piper's first ONNX load used to occur after the first model response,
+        # turning a ready reply into a multi-second silent wait. Pay it during
+        # service startup so the first streamed sentence can speak immediately.
+        if tts.has_voice(settings.tts_default_voice):
+            await asyncio.to_thread(tts.preload, settings.tts_default_voice)
 
         embedder = EmbeddingModel(settings.embedding_model_name, settings.embedding_batch_size)
         llm = LLMService(
@@ -145,14 +251,26 @@ class ServiceContainer:
 
         caption: CaptionService | None = None
         if settings.vision_captioning_enabled:
-            # `CaptionService.__init__` synchronously downloads/loads a VLM
-            # (network + disk, potentially slow) -- off the event loop like
-            # every other model construction here, so it can't stall startup
-            # for routes that don't touch vision.
+            # `CaptionService.__init__` builds the `vision/` pipeline, which
+            # loads three ONNX graphs off disk (the CLIP towers are ~900MB
+            # between them) -- off the event loop like every other model
+            # construction here, so it can't stall startup for routes that
+            # don't touch vision.
             loop = asyncio.get_event_loop()
             caption = await loop.run_in_executor(None, CaptionService)
 
         llm_gate = LLMPriorityGate(speech_lull_seconds=settings.llm_speech_lull_seconds)
+        tasks = BackgroundTaskRegistry()
+
+        graph = build_conversation_graph(
+            settings,
+            llm=llm,
+            memory=memory,
+            rag=rag,
+            web_search=web_search,
+            gate=llm_gate,
+            tasks=tasks,
+        )
 
         logger.info("Service container initialized")
         return cls(
@@ -185,8 +303,9 @@ class ServiceContainer:
             reasoning_max_tokens=settings.reasoning_max_tokens,
             reasoning_token_scale=settings.reasoning_token_scale,
             emotion_executor=ThreadPoolExecutor(max_workers=settings.emotion_executor_max_workers),
-            tasks=BackgroundTaskRegistry(),
+            tasks=tasks,
             llm_gate=llm_gate,
+            graph=graph,
             index_defer_timeout=settings.llm_speech_defer_seconds,
         )
 

@@ -93,17 +93,25 @@ async def test_chat_stream_vad_uses_fast_short_generation_policy(client, fake_br
     assert resp.status_code == 200
     messages, options = fake_brain_bundle.llm.stream_chat_calls[-1]
     assert options == {"temperature": 0.55, "num_predict": 256}
-    # The first-turn VAD note is intentionally dropped so it cannot replace the
-    # persona injected by the Modelfile; its fast token/temperature controls
-    # still apply to the stream.
-    assert messages == [{"role": "user", "content": "toi dang roi"}]
+    # A system note at index 0 would replace the Modelfile persona, so the
+    # server-generated (not raw VAD) instruction is attached to the user turn.
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"].startswith("toi dang roi\n\n[Hướng dẫn phản hồi nội bộ: Response style:")
+    assert "-0.7" not in messages[0]["content"]
+    assert "0.9" not in messages[0]["content"]
 
 
 async def test_chat_stream_regenerates_once_when_every_sentence_is_repeated(client, fake_brain_bundle):
     """Nothing has reached the client yet, so the turn can still be rewritten
     rather than emitting the repetition the filter just caught."""
-    fake_brain_bundle.llm.stream_chunks = ["Bạn muốn nghe chuyện khác hay tìm chủ đề mới?"]
-    fake_brain_bundle.llm.response_text = "Câu trả lời mới, không lặp."
+    repeated = "Bạn muốn nghe chuyện khác hay tìm chủ đề mới?"
+    calls: list[list[dict]] = []
+
+    async def stream_chat(messages, options=None, *, think: bool = False):
+        calls.append(messages)
+        yield "Câu trả lời mới, không lặp." if len(calls) > 1 else repeated
+
+    fake_brain_bundle.llm.stream_chat = stream_chat
     fake_brain_bundle.memory.messages.extend([
         {"role": "user", "content": "kể chuyện gì đi", "vad": None, "emotion": None,
          "timestamp": "2026-09-02T13:00:00+00:00"},
@@ -118,7 +126,7 @@ async def test_chat_stream_regenerates_once_when_every_sentence_is_repeated(clie
     events = _parse_sse(resp.text)
 
     assert [e["content"] for e in events if e["type"] == "delta"] == ["Câu trả lời mới, không lặp."]
-    assert fake_brain_bundle.llm.chat_calls, "the retry goes through the buffered call"
+    assert len(calls) == 2
 
 
 async def test_chat_stream_keeps_the_raw_reply_when_the_retry_repeats_too(client, fake_brain_bundle):

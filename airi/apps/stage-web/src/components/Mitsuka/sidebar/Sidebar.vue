@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { NavItem } from './Navigation.vue'
 
-import MitsukaIntroCard from './MitsukaIntroCard.vue'
 import MitsukaLogo from './MitsukaLogo.vue'
 import Navigation from './Navigation.vue'
 import UserCard from './UserCard.vue'
@@ -12,7 +11,7 @@ defineProps<{
   online: boolean | null
 }>()
 
-defineEmits<{ (e: 'learnMore' | 'openSettings'): void }>()
+defineEmits<{ (e: 'openSettings'): void }>()
 
 const active = defineModel<string>({ required: true })
 </script>
@@ -22,7 +21,6 @@ const active = defineModel<string>({ required: true })
     <MitsukaLogo />
     <Navigation v-model="active" :items="items" />
     <div class="mk-sidebar-spacer" />
-    <MitsukaIntroCard @learn-more="$emit('learnMore')" />
     <UserCard :name="userName" :online="online" @open-settings="$emit('openSettings')" />
   </aside>
 </template>

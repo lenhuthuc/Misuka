@@ -29,9 +29,7 @@ const draft = defineModel<string>('draft', { default: '' })
 <template>
   <section class="chat-panel" aria-label="Khung trò chuyện">
     <ChatHeader
-      :listening="listening"
       :dark="dark"
-      @toggle-listening="emit('toggleListening')"
       @toggle-theme="emit('toggleTheme')"
       @new-conversation="emit('newConversation')"
       @open-settings="emit('openSettings')"
@@ -45,6 +43,7 @@ const draft = defineModel<string>('draft', { default: '' })
     </p>
 
     <QuickActions
+      v-if="messages.length <= 2"
       :actions="quickActions"
       :disabled="busy"
       @pick="action => emit('pickQuickAction', action)"
@@ -67,11 +66,12 @@ const draft = defineModel<string>('draft', { default: '' })
   min-height: 0;
   height: 100%;
   flex-direction: column;
-  border: 1px solid var(--mk-border);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--mk-radius-lg);
-  background: var(--mk-panel);
-  box-shadow: var(--mk-shadow);
-  backdrop-filter: blur(22px) saturate(1.1);
+  background: rgba(16, 9, 28, 0.38);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
 }
 
 .chat-error {

@@ -21,11 +21,9 @@
  *   it. `extractSpeakableChunks` returns the unconsumed remainder instead of
  *   a flag, and that remainder is the *only* text the caller may flush — so
  *   "spoken twice" is not a state this module can be put into.
- * - **Prosody with no clause to plan across.** A per-sentence request carried
- *   no V/A/D, because the reply's own reading only exists once the reply
- *   does. `speechRequestBody` now asks the server to read each sentence's
- *   emotion off that sentence (`auto_prosody`), and a sentence *is* the clause
- *   the Fujisaki contour is planned over (VAD/service/prosody.py).
+ * - **Prosody before first audio.** A per-sentence text-VAD request delayed
+ *   Piper behind a second model call. Streaming requests now keep Piper's
+ *   default delivery so rendering begins as soon as each sentence arrives.
  *
  * Playback goes through the Web Audio graph rather than an `<audio>` element
  * so the waveform is observable: an `AnalyserNode` tap turns the reply into a
@@ -150,7 +148,7 @@ export function mouthOpenFromWaveform(samples: Uint8Array): number {
  *
  * A partial reading is never sent: the keys are all present or all absent, so
  * the backend cannot treat a missing axis as neutral. With none of them, the
- * request opts into server-derived prosody instead.
+ * request keeps Piper's default delivery for immediate streaming playback.
  */
 export function speechRequestBody(text: string, vad?: AgentVad): Record<string, unknown> {
   return {
@@ -159,10 +157,9 @@ export function speechRequestBody(text: string, vad?: AgentVad): Record<string, 
     ...(vad
       ? { valence: vad.valence, arousal: vad.arousal, dominance: vad.dominance }
       // No reading to send — a sentence spoken mid-stream never has one, since
-      // the reply's own V/A/D is only inferred once the reply is complete. Ask
-      // the server to read this sentence's emotion off its own words instead
-      // of falling back to the voice's flat default delivery.
-      : { auto_prosody: true }),
+      // The reply's own V/A/D only exists after the whole reply. Do not run a
+      // second text-VAD model per sentence before Piper can render it.
+      : { auto_prosody: false }),
   }
 }
 

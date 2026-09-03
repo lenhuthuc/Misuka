@@ -29,6 +29,7 @@ async def run_memory_tasks(
     vector: "VectorService | None" = None,
     gate: "LLMPriorityGate | None" = None,
     defer_timeout: float = 90.0,
+    session_id: str = "default",
 ) -> None:
     """Save the turn and index it for retrieval.
 
@@ -50,11 +51,12 @@ async def run_memory_tasks(
 
     """
     try:
-        await memory.save_message("user", query)
+        await memory.save_message("user", query, session_id=session_id)
         await memory.save_message(
             "assistant", response,
             vad=emotion.vad if emotion else None,
             emotion=emotion.emotion if emotion else None,
+            session_id=session_id,
         )
         logger.info("background | saved conversation turn")
     except Exception:

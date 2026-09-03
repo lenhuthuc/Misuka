@@ -26,13 +26,13 @@ import SettingsPanel from '../components/Mitsuka/settings/SettingsPanel.vue'
 import IconButton from '../components/Mitsuka/shared/IconButton.vue'
 import Sidebar from '../components/Mitsuka/sidebar/Sidebar.vue'
 import Live2DStage from '../components/Mitsuka/stage/Live2DStage.vue'
+import SceneBackground from '../components/Mitsuka/stage/SceneBackground.vue'
 
 import '../components/Mitsuka/theme.css'
 
-// 127.0.0.1 rather than `localhost`: uvicorn binds `0.0.0.0`, which is IPv4
-// only, while Windows resolves `localhost` to `::1` first — anything else
-// holding the IPv6 loopback on this port answers instead of local-api.
-const LOCAL_API_URL = 'http://127.0.0.1:8010'
+// In the browser, use relative path so Vite / ngrok reverse proxy handles it seamlessly.
+// Fallback to 127.0.0.1:8010 for SSR or node environments.
+const LOCAL_API_URL = typeof window !== 'undefined' ? '' : 'http://127.0.0.1:8010'
 const GREETING = 'Xin chào! Mình là Mitsuka ✨\nMình có thể giúp gì cho bạn hôm nay?'
 
 const router = useRouter()
@@ -203,11 +203,16 @@ async function send(text: string, image?: File) {
     return
   }
 
+  // Phrased as the user telling Mitsuka what she is looking at, because
+  // that is what she answers. Naming the machinery instead — "hệ thống
+  // nhận diện nội dung ảnh là …" — makes a 1.7B model reply about the
+  // recognition ("nội dung được nhận diện chính xác") rather than about
+  // the picture.
   const query = text
-    ? `${text}\n[Mô tả ảnh đính kèm, do hệ thống tự nhận diện: ${caption}]`
-    : `Mình vừa gửi một bức ảnh. Hệ thống nhận diện nội dung ảnh là: "${caption}". Hãy bình luận hoặc trả lời phù hợp.`
+    ? `${text}\n(Ảnh mình gửi kèm: ${caption})`
+    : `Mình vừa gửi cho bạn một bức ảnh. ${caption} Bạn thấy sao?`
 
-  // `displayContent: text` (not the combined `query`) keeps the VLM's own
+  // `displayContent: text` (not the combined `query`) keeps the description's
   // wording out of the user's chat history — they see what they typed (or
   // nothing) plus their image, never the auto-generated description.
   pendingUserBubble = { imageUrl: url, displayContent: text }
@@ -284,6 +289,7 @@ async function runQuickAction(action: QuickAction) {
 const paused = ref(false)
 const breakpoints = useBreakpoints(breakpointsTailwind)
 const isMobile = breakpoints.smaller('md')
+const mobileView = ref<'split' | 'chat' | 'stage'>('split')
 const { x: mouseX, y: mouseY } = useMouse()
 const cursorPosition = computed(() => ({ x: mouseX.value, y: mouseY.value }))
 const { isFullscreen, toggle: toggleFullscreen } = useFullscreen()
@@ -292,11 +298,10 @@ const backgroundStore = useBackgroundStore()
 const { selectedOption, sampledColor } = storeToRefs(backgroundStore)
 const { stageModelRenderer, stageViewControlsEnabled } = storeToRefs(useSettings())
 
-// `Live2DStage` re-exposes the background provider's `surfaceEl` under the same
-// name, which is the whole of what the sampler reads off this ref.
-const backgroundSurface = useTemplateRef<{ surfaceEl?: HTMLElement | null }>('stage')
+// `SceneBackground` exposes `surfaceEl` which is used to derive theme colors.
+const sceneBackgroundRef = useTemplateRef<{ surfaceEl?: HTMLElement | null }>('sceneBackgroundRef')
 const { syncBackgroundTheme } = useBackgroundThemeColor({
-  backgroundSurface: backgroundSurface as never,
+  backgroundSurface: sceneBackgroundRef as never,
   selectedOption,
   sampledColor,
 })
@@ -477,9 +482,75 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="mitsuka-app" :class="{ 'mitsuka-app--light': !isDark }">
-    <div class="mk-aurora mk-aurora--one" />
-    <div class="mk-aurora mk-aurora--two" />
+  <div class="mitsuka-app" :class="[{ 'mitsuka-app--light': !isDark }, isMobile ? `mitsuka-app--m-${mobileView}` : '']">
+    <!-- Full-screen Scene Background behind everything -->
+    <SceneBackground
+      ref="sceneBackgroundRef"
+      :background="selectedOption"
+      :top-color="sampledColor"
+      class="mk-app-background"
+    />
+
+    <IconButton
+      v-if="!isMobile"
+      class="mk-drawer-toggle"
+      icon="i-solar:hamburger-menu-outline"
+      label="Mở menu"
+      @click="sidebarOpen = true"
+    />
+
+    <!-- Mobile Top Navigation Bar -->
+    <header v-if="isMobile" class="mk-mobile-topbar">
+      <IconButton
+        icon="i-solar:hamburger-menu-outline"
+        label="Mở menu"
+        size="sm"
+        @click="sidebarOpen = true"
+      />
+
+      <div class="mk-mobile-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          class="mk-mobile-tab"
+          :class="{ 'mk-mobile-tab--active': mobileView === 'chat' }"
+          aria-label="Chế độ chỉ trò chuyện"
+          @click="mobileView = 'chat'"
+        >
+          <span class="i-solar:chat-round-line-bold" />
+          <span>Chat</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="mk-mobile-tab"
+          :class="{ 'mk-mobile-tab--active': mobileView === 'split' }"
+          aria-label="Chế độ chia đôi màn hình"
+          @click="mobileView = 'split'"
+        >
+          <span class="i-solar:minimize-square-3-outline" />
+          <span>Chia đôi</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="mk-mobile-tab"
+          :class="{ 'mk-mobile-tab--active': mobileView === 'stage' }"
+          aria-label="Chế độ xem Mitsuka"
+          @click="mobileView = 'stage'"
+        >
+          <span class="i-solar:smile-circle-bold" />
+          <span>Mitsuka</span>
+        </button>
+      </div>
+
+      <IconButton
+        :icon="isDark ? 'i-solar:sun-outline' : 'i-solar:moon-outline'"
+        label="Đổi giao diện"
+        size="sm"
+        @click="toggleDark()"
+      />
+    </header>
 
     <div v-if="sidebarOpen" class="mk-drawer-scrim" @click="sidebarOpen = false" />
 
@@ -494,17 +565,12 @@ onUnmounted(() => {
       />
     </div>
 
-    <div class="mk-shell-stage">
-      <IconButton
-        class="mk-drawer-toggle"
-        icon="i-solar:hamburger-menu-outline"
-        label="Mở menu"
-        @click="sidebarOpen = true"
-      />
+    <div
+      class="mk-shell-stage"
+      :class="{ 'mk-shell--hidden-mobile': isMobile && mobileView === 'chat' }"
+    >
       <Live2DStage
         ref="stage"
-        :background="selectedOption"
-        :top-color="sampledColor"
         :cursor-position="cursorPosition"
         :enable-orbit-controls="!isMobile"
         :paused="paused"
@@ -523,7 +589,10 @@ onUnmounted(() => {
       />
     </div>
 
-    <div class="mk-shell-chat">
+    <div
+      class="mk-shell-chat"
+      :class="{ 'mk-shell--hidden-mobile': isMobile && mobileView === 'stage' }"
+    >
       <ChatPanel
         v-if="panel === 'chat'"
         v-model:draft="draft"
@@ -557,43 +626,64 @@ onUnmounted(() => {
 <style scoped>
 .mitsuka-app {
   position: relative;
-  display: grid;
   overflow: hidden;
   height: 100dvh;
   width: 100vw;
-  background: radial-gradient(120% 120% at 50% 0%, var(--mk-bg-2) 0%, var(--mk-bg) 62%);
-  padding: 0.85rem;
-  gap: 0.85rem;
-  grid-template-columns: 16.5rem minmax(0, 1fr) minmax(21rem, 28rem);
+  background: #0b0710;
 }
 
-.mk-aurora {
+.mk-app-background {
   position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   z-index: 0;
-  width: 34rem;
-  height: 34rem;
-  border-radius: 999px;
-  filter: blur(120px);
-  opacity: 0.16;
   pointer-events: none;
 }
 
-.mk-aurora--one { top: -16rem; left: 18%; background: #8b5cf6; }
-.mk-aurora--two { right: -12rem; bottom: -18rem; background: #ec4899; }
-
-.mk-shell-sidebar,
-.mk-shell-stage,
-.mk-shell-chat {
-  position: relative;
-  z-index: 1;
-  min-width: 0;
-  min-height: 0;
+.mk-shell-sidebar {
+  position: fixed;
+  z-index: 70;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 17rem;
+  padding: 0.85rem;
+  transform: translateX(-102%);
+  transition: transform 220ms ease;
 }
 
-.mk-shell-stage { display: flex; flex-direction: column; }
-.mk-shell-stage > :last-child { flex: 1; min-height: 0; }
+.mk-shell-sidebar--open { transform: translateX(0); }
 
-.mk-drawer-toggle { display: none; }
+/* Desktop: Live2D stage on the left/center, transparent chat on the right */
+.mk-shell-stage {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 28rem;
+  z-index: 5;
+}
+
+.mk-shell-chat {
+  position: absolute;
+  top: 1.2rem;
+  right: 1.2rem;
+  bottom: 1.2rem;
+  z-index: 10;
+  width: 27rem;
+  max-width: calc(100vw - 2.4rem);
+}
+
+.mk-drawer-toggle {
+  position: absolute;
+  z-index: 30;
+  top: 1.2rem;
+  left: 1.2rem;
+  display: grid;
+  background: rgb(14 8 24 / 0.65);
+  backdrop-filter: blur(18px);
+}
 
 .mk-drawer-scrim {
   position: fixed;
@@ -603,46 +693,111 @@ onUnmounted(() => {
   backdrop-filter: blur(3px);
 }
 
-@media (max-width: 1180px) {
-  .mitsuka-app { grid-template-columns: minmax(0, 1fr) minmax(20rem, 25rem); }
-
-  .mk-shell-sidebar {
-    position: fixed;
-    z-index: 70;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 17rem;
-    padding: 0.85rem;
-    transform: translateX(-102%);
-    transition: transform 220ms ease;
-  }
-
-  .mk-shell-sidebar--open { transform: translateX(0); }
-
-  .mk-drawer-toggle {
-    position: absolute;
-    z-index: 30;
-    top: 0.85rem;
-    left: 0.85rem;
-    display: grid;
-    background: rgb(14 8 24 / 0.7);
-    backdrop-filter: blur(18px);
-  }
-
-  /* The stage HUD would sit under the drawer button otherwise. */
-  .mk-shell-stage :deep(.stage-hud--top) { left: 3.6rem; }
-}
+.mk-mobile-topbar { display: none; }
 
 @media (max-width: 860px) {
-  .mitsuka-app {
-    padding: 0.6rem;
-    gap: 0.6rem;
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(11rem, 30dvh) minmax(0, 1fr);
+  .mk-mobile-topbar {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    right: 0.5rem;
+    z-index: 25;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.35rem 0.6rem;
+    border-radius: var(--mk-radius);
+    background: rgba(18, 10, 28, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(18px);
+    gap: 0.4rem;
   }
 
-  .mk-shell-stage :deep(.character-controller) { display: none; }
+  .mk-mobile-tabs {
+    display: flex;
+    background: var(--mk-inset);
+    border-radius: 999px;
+    padding: 0.2rem;
+    gap: 0.2rem;
+    border: 1px solid var(--mk-border);
+  }
+
+  .mk-mobile-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.28rem;
+    padding: 0.28rem 0.65rem;
+    border-radius: 999px;
+    border: 0;
+    background: transparent;
+    color: var(--mk-ink-dim);
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 180ms ease;
+  }
+
+  .mk-mobile-tab--active {
+    background: var(--mk-raise);
+    color: var(--mk-ink);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  }
+
+  .mk-shell--hidden-mobile {
+    display: none !important;
+  }
+
+  /* Mobile Split Mode: Stage in upper area, Chat in lower area */
+  .mitsuka-app--m-split .mk-shell-stage {
+    position: absolute;
+    top: 3.2rem;
+    left: 0;
+    right: 0;
+    height: 42dvh;
+    z-index: 5;
+  }
+
+  .mitsuka-app--m-split .mk-shell-chat {
+    position: absolute;
+    top: calc(42dvh + 3.4rem);
+    bottom: max(0.4rem, env(safe-area-inset-bottom));
+    left: 0.5rem;
+    right: 0.5rem;
+    width: auto;
+    max-width: none;
+    height: auto;
+    z-index: 10;
+  }
+
+  /* Mobile Full Chat Mode */
+  .mitsuka-app--m-chat .mk-shell-stage {
+    display: none !important;
+  }
+  .mitsuka-app--m-chat .mk-shell-chat {
+    position: absolute;
+    top: 3.4rem;
+    bottom: max(0.4rem, env(safe-area-inset-bottom));
+    left: 0.5rem;
+    right: 0.5rem;
+    width: auto;
+    max-width: none;
+    height: auto;
+    z-index: 10;
+  }
+
+  /* Mobile Stage Mode: Character fills screen */
+  .mitsuka-app--m-stage .mk-shell-stage {
+    position: absolute;
+    top: 3.2rem;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: auto;
+    z-index: 5;
+  }
+  .mitsuka-app--m-stage .mk-shell-chat {
+    display: none !important;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

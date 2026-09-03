@@ -294,10 +294,11 @@ def build_messages(
     back as a fixed mood prompt; the current user's VAD produces the small
     behavioural policy passed in by the turn orchestrator.
 
-    On the first turn of a fresh conversation the note is dropped rather than
-    sent, because with no history in front of it there is no position for it
-    that is not index 0 -- and losing the persona for a turn is a worse trade
-    than losing one turn of background notes. Every later turn carries it.
+    On the first turn of a fresh conversation, a system note would replace the
+    Modelfile persona. The server-derived response policy is therefore appended
+    to the user turn instead: it reaches the model without exposing raw V/A/D
+    coordinates or losing the persona. Other background notes stay dropped on
+    that first turn because they are not needed for the immediate response.
     """
     history = _fit_history(recent, history_char_budget)
     note = _turn_note(
@@ -313,5 +314,7 @@ def build_messages(
     messages: list[dict[str, str]] = list(history)
     if note and messages:
         messages.append({"role": "system", "content": note})
+    elif response_policy_instruction:
+        query = f"{query}\n\n[Hướng dẫn phản hồi nội bộ: {response_policy_instruction}]"
     messages.append({"role": "user", "content": query})
     return messages

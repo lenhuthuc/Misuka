@@ -16,6 +16,7 @@ Synthesis is deliberately synchronous here and pushed to a thread by callers.
 
 import io
 import logging
+import re
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,17 @@ logger = logging.getLogger(__name__)
 # Control-rate for the Fujisaki contour. 200 Hz resolves the ~50 ms accent
 # rises the model produces without evaluating the filters per audio sample.
 _CONTOUR_RATE_HZ = 200.0
+_MITSUKA_NAME = re.compile(r"\bMitsuka\b", re.IGNORECASE)
+# Preserve decimal points (e.g. 3.14), but remove sentence dots that this
+# Piper voice otherwise verbalises as "chấm".
+_SPOKEN_DOT = re.compile(r"(?<!\d)\.+|\.+(?!\d)")
+
+
+def normalize_piper_text(text: str) -> str:
+    """Make display text natural for Piper without changing the chat transcript."""
+    text = _MITSUKA_NAME.sub("Mít-su-ka", text)
+    text = _SPOKEN_DOT.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 @dataclass
@@ -111,12 +123,20 @@ class TTSService:
     def has_voice(self, voice_id: str) -> bool:
         return voice_id in self._piper
 
+    def preload(self, voice_id: str) -> None:
+        """Load the default voice before the first reply needs to speak."""
+        entry = self._piper.get(voice_id)
+        if entry is None:
+            raise KeyError(voice_id)
+        entry.load()
+
     def synthesize_wav(self, voice_id: str, text: str, plan: ProsodyPlan | None = None) -> bytes:
         """Render `text` as one complete WAV, shaped by `plan`.
 
         `plan=None` renders with the voice's own defaults -- the behaviour
         every caller had before prosody existed.
         """
+        text = normalize_piper_text(text)
         entry = self._piper.get(voice_id)
         if entry is None:
             raise KeyError(voice_id)

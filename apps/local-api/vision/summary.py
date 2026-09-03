@@ -9,6 +9,9 @@ Vietnamese text, never a tensor. Three products come out of here:
   ocr_pairs     label/value pairs recovered from OCR *layout*, which is what
                 makes "Cores: 12" answerable without a caption model
   fast_summary  the one string handed to the VLM as pre-extracted context
+  chat_summary  the same content said in a sentence, for a chat model to
+                answer from -- see `build_chat_summary` for why it is not
+                simply `fast_summary`
 
 Pure functions over plain dicts on purpose: no model, no I/O, fully testable.
 """
@@ -266,6 +269,109 @@ def describe_objects(detections: list[dict], vi_names: dict[str, str] | None = N
     return ", ".join(f"{vi_names.get(label, label)}×{count}" for label, count in ordered)
 
 
+def _text_lines(ocr: list[dict], ocr_pairs: list[dict]) -> list[str]:
+    """OCR as readable lines: pairs first, then whatever they did not consume.
+
+    Pairs come first because they carry their own label -- "Cores 12" survives
+    truncation as an answer, the bare line "12" does not.
+    """
+    lines: list[str] = [f"{pair['key']} {pair['value']}" for pair in ocr_pairs]
+    paired_values = {pair["value"] for pair in ocr_pairs}
+    paired_keys = {pair["key"] for pair in ocr_pairs}
+    for item in ocr:
+        text = item.get("text", "").strip()
+        if not text or text in paired_values or _clean_key(text) in paired_keys:
+            continue
+        lines.append(text)
+    return lines
+
+
+# COCO classes that need a Vietnamese classifier to read as a sentence: "một
+# con mèo", where "3 người" and "1 laptop" take none. Only the animals do.
+_ANIMAL_LABELS = frozenset({
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear",
+    "zebra", "giraffe",
+})
+
+_TEXT_TAG_LEAD: dict[str, str] = {
+    TAG_SCREENSHOT: "Đây là ảnh chụp màn hình.",
+    TAG_DOCUMENT: "Đây là ảnh một trang tài liệu.",
+}
+
+# Only ever speaks about objects: incidental text may well have been found
+# and deliberately dropped, so claiming there was none would be a lie.
+NOTHING_RECOGNISED = "Mình không nhận ra rõ vật thể nào trong ảnh."
+
+
+def phrase_objects(detections: list[dict], vi_names: dict[str, str] | None = None) -> str:
+    """"3 người và một con mèo" -- the same counts as `describe_objects`, said."""
+    counts = _count_labels(detections)
+    if not counts:
+        return ""
+    vi_names = vi_names or {}
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+    parts = []
+    for label, count in ordered:
+        noun = vi_names.get(label, label)
+        classifier = "con " if label in _ANIMAL_LABELS else ""
+        # "một con mèo" reads; "1 con mèo" reads like a form field, and the
+        # whole point of this string is that it does not sound like one.
+        quantity = "một" if count == 1 else str(count)
+        parts.append(f"{quantity} {classifier}{noun}")
+
+    if len(parts) == 1:
+        return parts[0]
+    return f"{', '.join(parts[:-1])} và {parts[-1]}"
+
+
+def build_chat_summary(
+    tags: list[str],
+    detections: list[dict],
+    ocr: list[dict],
+    ocr_pairs: list[dict],
+    vi_names: dict[str, str] | None = None,
+    *,
+    max_lines: int = _MAX_SUMMARY_LINES,
+) -> str:
+    """What an image is, phrased for a chat model rather than for the router.
+
+    `fast_summary` is written for the router and the VLM prompt: tagged, dense,
+    machine-shaped. Handed to a small chat model it leaks that shape into the
+    reply -- measured on this project's Qwen3-1.7B, "Ảnh scene. Vật thể:
+    mèo×1." comes back as "Nội dung được nhận diện chính xác", where "Trong
+    ảnh có một con mèo." comes back as a remark about the cat.
+
+    Incidental text is dropped unless the image *is* text (a screenshot or a
+    document). A watermark in the corner of a photo is not what the photo is
+    about, and quoting it invites the model to talk about the watermark
+    instead -- which is exactly what a stock photo's "Fago Pet" did.
+
+    Never "": a caller reads the empty string as "captioning unavailable", so
+    an image the models simply found nothing in has to say so in words.
+    """
+    tag = tags[0] if tags else TAG_UNKNOWN
+    parts: list[str] = []
+
+    objects = phrase_objects(detections, vi_names)
+    if objects:
+        parts.append(f"Trong ảnh có {objects}.")
+
+    if tag in TEXT_TAGS:
+        lead = _TEXT_TAG_LEAD.get(tag, "")
+        lines = _text_lines(ocr, ocr_pairs)
+        if lines:
+            shown = lines[:max_lines]
+            joined = " | ".join(shown)
+            if len(lines) > max_lines:
+                joined += f" | (+{len(lines) - max_lines} dòng nữa)"
+            parts.append(f"{lead} Chữ trong ảnh: {joined}.".strip())
+        elif lead:
+            parts.append(lead)
+
+    return " ".join(parts) if parts else NOTHING_RECOGNISED
+
+
 def build_fast_summary(
     tags: list[str],
     detections: list[dict],
@@ -285,14 +391,7 @@ def build_fast_summary(
     objects = describe_objects(detections, vi_names)
     objects_part = f"Vật thể: {objects}." if objects else "Không phát hiện vật thể."
 
-    lines: list[str] = [f"{pair['key']} {pair['value']}" for pair in ocr_pairs]
-    paired_values = {pair["value"] for pair in ocr_pairs}
-    paired_keys = {pair["key"] for pair in ocr_pairs}
-    for item in ocr:
-        text = item.get("text", "").strip()
-        if not text or text in paired_values or _clean_key(text) in paired_keys:
-            continue
-        lines.append(text)
+    lines = _text_lines(ocr, ocr_pairs)
 
     text_part = ""
     if lines:

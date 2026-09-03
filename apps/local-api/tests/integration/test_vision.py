@@ -24,11 +24,9 @@ async def test_caption_image_success(client, fake_brain_bundle):
     assert resp.status_code == 200
     assert resp.json() == {"caption": fake_brain_bundle.caption.caption_to_return}
 
-    # The decoded frame reaches CaptionService in the BGR-uint8-HWC shape
-    # `caption()`'s contract (mirroring cv2) expects.
-    frame = fake_brain_bundle.caption.calls[-1]
-    assert frame.shape == (4, 4, 3)
-    assert frame.dtype.name == "uint8"
+    # The upload reaches CaptionService as the encoded bytes it arrived as --
+    # `VisionPipeline.ingest()` does its own decoding, EXIF rotation included.
+    assert fake_brain_bundle.caption.calls[-1] == _png_bytes()
 
 
 async def test_caption_image_marks_the_llm_gate_active(client, fake_brain_bundle):
