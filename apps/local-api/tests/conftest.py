@@ -14,6 +14,7 @@ import wave
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import numpy as np
 import pytest
 import pytest_asyncio
 
@@ -69,6 +70,18 @@ class FakeASRService:
     def transcribe(self, samples) -> str:
         self.calls.append(len(samples))
         return "fake transcript"
+
+
+class FakeCaptionService:
+    """Stands in for `brain.caption_service.CaptionService`."""
+
+    def __init__(self) -> None:
+        self.calls: list[np.ndarray] = []
+        self.caption_to_return = "a fake image caption"
+
+    async def caption(self, frame: np.ndarray) -> str:
+        self.calls.append(frame)
+        return self.caption_to_return
 
 
 class FakeTTSService:
@@ -227,6 +240,8 @@ class FakeBrainBundle:
         self.web_search = FakeWebSearchService()
         self.web_search_enabled = True
         self.web_search_knowledge_enabled = True
+        self.caption = FakeCaptionService()
+        self.vision_caption_timeout_seconds = 30.0
         self.llm_gate = LLMPriorityGate()
 
     def build_container(self) -> ServiceContainer:
@@ -250,6 +265,8 @@ class FakeBrainBundle:
             knowledge_temperature=0.30,
             knowledge_max_tokens=480,
             emotion=EmotionService(self.text_vad),
+            caption=self.caption,
+            vision_caption_timeout_seconds=self.vision_caption_timeout_seconds,
             memory_recent_limit=18,
             memory_recent_char_budget=3000,
             reasoning_enabled=True,

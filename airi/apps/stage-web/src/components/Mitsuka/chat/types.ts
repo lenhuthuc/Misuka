@@ -10,4 +10,10 @@ export interface ChatMessage {
   streaming?: boolean
   /** Set when the turn failed; rendered in place of the content. */
   error?: string
+  /**
+   * Object URL for an image attached to a user message. Local-api's chat
+   * model is text-only, so this never reaches the AI — it is a client-side
+   * attachment shown in the bubble, not something Mitsuka can see.
+   */
+  imageUrl?: string
 }

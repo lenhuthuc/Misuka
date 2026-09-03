@@ -14,6 +14,33 @@ _FLORENCE_REPO  = "microsoft/Florence-2-base"
 _CAPTION_PROMPT = "Describe this image briefly."
 
 
+class ImageDecodeError(ValueError):
+    """Raised by `decode_image_to_bgr` when the bytes are not a readable image."""
+
+
+def decode_image_to_bgr(data: bytes) -> np.ndarray:
+    """Decode an uploaded image file into the BGR uint8 array `caption()` expects.
+
+    `caption()`'s frame contract mirrors `cv2.VideoCapture`/`cv2.imread` (BGR
+    channel order), which is what `vision_capture.py`'s webcam/screen path
+    already hands it. A one-off image upload has no OpenCV frame to begin
+    with, so this decodes via Pillow instead and flips RGB -> BGR to land on
+    the exact same contract, rather than adding an `cv2.imdecode` path (and
+    its `opencv-python` dependency) for what Pillow already reads.
+    """
+    from io import BytesIO
+
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(BytesIO(data)) as img:
+            rgb = np.array(img.convert("RGB"))
+    except UnidentifiedImageError as exc:
+        raise ImageDecodeError(f"Not a readable image: {exc}") from exc
+
+    return rgb[:, :, ::-1]
+
+
 class CaptionService:
     """Load a VLM once, call caption() per frame."""
 
