@@ -70,6 +70,17 @@ const messages = ref<ChatMessage[]>([
 // — because it is also what tells the typing indicator the reply has landed.
 const replyId = ref<string | null>(null)
 let userBubbleTurn = -1
+// Set by `send()` right before starting a turn with an attached image, and
+// consumed by the user-bubble watcher below — `processText` only carries the
+// caption text through the turn, so the image rides alongside it here.
+let pendingUserImageUrl: string | undefined
+// Every object URL a message bubble might still be pointing at, so they can
+// all be released together instead of leaking one per attached image.
+const attachmentObjectUrls: string[] = []
+function releaseAttachmentObjectUrls() {
+  for (const url of attachmentObjectUrls.splice(0))
+    URL.revokeObjectURL(url)
+}
 // A ref, not a plain local: `thinking` below is computed from it, so the
 // typing indicator has to re-evaluate the moment the first token lands.
 const replyTurn = ref(-1)
@@ -86,7 +97,9 @@ watch([localTurn, localTranscript], ([turn, text]) => {
   if (!text || turn === userBubbleTurn)
     return
   userBubbleTurn = turn
-  messages.value.push({ id: nextMessageId(), role: 'user', content: text, at: Date.now() })
+  const imageUrl = pendingUserImageUrl
+  pendingUserImageUrl = undefined
+  messages.value.push({ id: nextMessageId(), role: 'user', content: text, at: Date.now(), imageUrl })
 })
 
 watch([localTurn, localReply], ([turn, text]) => {
@@ -122,7 +135,28 @@ watch(localState, (state) => {
 // carries on showing that the reply is still arriving.
 const thinking = computed(() => busy.value && replyTurn.value !== localTurn.value)
 
-async function send(text: string) {
+// `processText` only ever carries the typed caption to local-api — its chat
+// model is text-only, so an attached image never reaches Mitsuka. It still
+// rides along as a client-side attachment on the user's own bubble (see the
+// `localTranscript` watcher above), and an image with no caption is shown
+// immediately rather than round-tripped through a model that cannot see it.
+async function send(text: string, image?: File) {
+  if (!text && !image)
+    return
+
+  if (!text && image) {
+    const url = URL.createObjectURL(image)
+    attachmentObjectUrls.push(url)
+    messages.value.push({ id: nextMessageId(), role: 'user', content: '', at: Date.now(), imageUrl: url })
+    return
+  }
+
+  if (image) {
+    const url = URL.createObjectURL(image)
+    attachmentObjectUrls.push(url)
+    pendingUserImageUrl = url
+  }
+
   await localConv.processText(text)
 }
 
@@ -130,6 +164,8 @@ function newConversation() {
   localConv.reset()
   clearTimeout(streamSettleTimer)
   replyId.value = null
+  pendingUserImageUrl = undefined
+  releaseAttachmentObjectUrls()
   messages.value = [{ id: nextMessageId(), role: 'assistant', content: GREETING, at: Date.now() }]
 }
 
@@ -380,6 +416,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopAudioInteraction()
   clearTimeout(streamSettleTimer)
+  releaseAttachmentObjectUrls()
   if (healthTimer)
     clearInterval(healthTimer)
 })

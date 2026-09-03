@@ -21,9 +21,18 @@ const time = computed(() => new Date(props.message.at).toLocaleTimeString('vi-VN
       <p v-if="message.error" class="bubble-text bubble-text--error">
         {{ message.error }}
       </p>
-      <p v-else class="bubble-text">
-        {{ message.content }}<span v-if="message.streaming" class="bubble-caret" />
-      </p>
+      <template v-else>
+        <img
+          v-if="message.imageUrl"
+          :src="message.imageUrl"
+          class="bubble-image"
+          alt="Ảnh đính kèm"
+          loading="lazy"
+        >
+        <p v-if="message.content" class="bubble-text">
+          {{ message.content }}<span v-if="message.streaming" class="bubble-caret" />
+        </p>
+      </template>
 
       <div class="bubble-foot">
         <span>{{ time }}</span>
@@ -81,6 +90,16 @@ const time = computed(() => new Date(props.message.at).toLocaleTimeString('vi-VN
 }
 
 .bubble-text--error { color: var(--mk-danger); }
+
+.bubble-image {
+  display: block;
+  width: 100%;
+  max-width: 18rem;
+  max-height: 16rem;
+  margin-bottom: 0.4rem;
+  border-radius: calc(var(--mk-radius) * 0.7);
+  object-fit: cover;
+}
 
 .bubble-caret {
   display: inline-block;
