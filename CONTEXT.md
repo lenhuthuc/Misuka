@@ -22,7 +22,7 @@ Mitsuka/
 ├─ apps/
 │  └─ local-api/            # All local services (single FastAPI app, port 8010)
 │     ├─ main.py            # create_app() factory; model/service construction happens in lifespan
-│     ├─ api/                # HTTP routes: chat, vad, emotion_vad, tts, whisper (Sherpa-ONNX-backed)
+│     ├─ api/                # HTTP routes: chat, vad, emotion_vad, tts, whisper (Sherpa-ONNX-backed), vision
 │     ├─ application/        # Cross-endpoint policy (prepare_turn: shared by /v1/chat and /v1/chat/stream)
 │     ├─ core/                # App composition: ServiceContainer, BackgroundTaskRegistry,
 │     │                        structured logging, ASGI request-context middleware
@@ -235,6 +235,22 @@ no final activation); scores are clamped and checked for NaN/Inf in
   `AnalyserNode` for the opening; the mouth closes over a 200 ms release once a sentence ends.
   `mouthOpenSource` arbitrates between that and the cloud speech pipeline's rAF loop.
 
+## Vision captioning (chat image attachments)
+The chat model (Qwen, via Ollama) is text-only and never receives pixels — an image attached in
+the Mitsuka UI reaches it only as words. `POST /v1/vision/caption`
+([apps/local-api/api/vision.py](apps/local-api/api/vision.py)) decodes the upload and runs it
+through `CaptionService` ([apps/local-api/brain/caption_service.py](apps/local-api/brain/caption_service.py):
+moondream2, then Florence-2, then a placeholder that returns `""`), which downloads its weights
+from Hugging Face on first use. The frontend (`apps/stage-web/src/pages/index.vue`'s `send()`)
+calls this first when a message has an attached image, folds the returned description into the
+text sent to `/v1/chat/stream`, but keeps the *displayed* chat bubble to just what the user typed
+(or nothing) plus the image itself — the auto-generated description is context for Mitsuka, never
+something shown back to the user as if they'd written it. Best-effort like RAG/web search: a
+disabled (`vision_captioning_enabled=false`), unavailable, or timed-out (`vision_caption_timeout_seconds`,
+default 30s) captioner degrades to `caption=""` rather than erroring, and the frontend falls back to
+sending the typed text alone (or, with no typed text either, just shows the image locally with no
+AI turn at all — nothing for a text-only model to answer).
+
 ## RAG pipeline
 - Embeddings: `paraphrase-multilingual-MiniLM-L12-v2` (384-dim, CPU).
 - Vector store: Qdrant, cosine distance; **in-memory by default** (`qdrant_url` empty in
@@ -328,6 +344,7 @@ python main.py   # http://127.0.0.1:8010 — Sherpa always runs on CPU/int8;
 | [apps/local-api/brain/config.py](apps/local-api/brain/config.py) | All tunables (Ollama model, Qdrant, model paths, logging, CORS) |
 | [apps/local-api/core/llm_priority.py](apps/local-api/core/llm_priority.py) | Keeps background LLM work off the runner for the whole user turn, playback included |
 | [apps/local-api/tests/conftest.py](apps/local-api/tests/conftest.py) | Fake service fixtures — read this before adding a new test |
+| [apps/local-api/brain/caption_service.py](apps/local-api/brain/caption_service.py) | VLM image captioning (moondream2/Florence-2) — how an attached image reaches the text-only chat model |
 | [airi/packages/stage-ui/src/composables/local-conversation.ts](airi/packages/stage-ui/src/composables/local-conversation.ts) | The turn pipeline: STT → SSE chat → one spoken utterance |
 | [airi/packages/stage-ui-live2d/src/composables/live2d/emotion-vad.ts](airi/packages/stage-ui-live2d/src/composables/live2d/emotion-vad.ts) | V/A/D → Live2D parameter mapping (edit here to tune the avatar's acting) |
 | [airi/packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts](airi/packages/stage-ui-live2d/src/composables/live2d/motion-manager.ts) | Per-frame plugin pipeline: blink, emotion, lip sync |

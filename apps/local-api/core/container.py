@@ -7,11 +7,13 @@ teardown, called once each from the FastAPI lifespan.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from brain.caption_service import CaptionService
 from brain.emotion_service import EmotionService
 from core.llm_priority import LLMPriorityGate
 from core.tasks import BackgroundTaskRegistry
@@ -55,6 +57,10 @@ class ServiceContainer:
     knowledge_temperature: float
     knowledge_max_tokens: int
     emotion: EmotionService
+    # None when `vision_captioning_enabled` is off -- callers must treat that
+    # the same as "captioning produced nothing" rather than a missing service.
+    caption: CaptionService | None
+    vision_caption_timeout_seconds: float
     memory_recent_limit: int
     memory_recent_char_budget: int
     reasoning_enabled: bool
@@ -137,6 +143,15 @@ class ServiceContainer:
         )
         emotion = EmotionService(text_vad)
 
+        caption: CaptionService | None = None
+        if settings.vision_captioning_enabled:
+            # `CaptionService.__init__` synchronously downloads/loads a VLM
+            # (network + disk, potentially slow) -- off the event loop like
+            # every other model construction here, so it can't stall startup
+            # for routes that don't touch vision.
+            loop = asyncio.get_event_loop()
+            caption = await loop.run_in_executor(None, CaptionService)
+
         llm_gate = LLMPriorityGate(speech_lull_seconds=settings.llm_speech_lull_seconds)
 
         logger.info("Service container initialized")
@@ -160,6 +175,8 @@ class ServiceContainer:
             knowledge_temperature=settings.knowledge_temperature,
             knowledge_max_tokens=settings.knowledge_max_tokens,
             emotion=emotion,
+            caption=caption,
+            vision_caption_timeout_seconds=settings.vision_caption_timeout_seconds,
             memory_recent_limit=settings.memory_recent_limit,
             memory_recent_char_budget=settings.memory_recent_char_budget,
             reasoning_enabled=settings.reasoning_enabled,
