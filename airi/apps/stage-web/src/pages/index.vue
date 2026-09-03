@@ -15,7 +15,7 @@ import { useVAD } from '@proj-airi/stage-ui/stores/ai/models/vad'
 import { useEmotionStore } from '@proj-airi/stage-ui/stores/modules/emotion'
 import { useSettings, useSettingsAudioDevice } from '@proj-airi/stage-ui/stores/settings'
 import { useTheme } from '@proj-airi/ui'
-import { breakpointsTailwind, useBreakpoints, useFullscreen, useMouse } from '@vueuse/core'
+import { breakpointsTailwind, useBreakpoints, useFullscreen, useMouse, useTitle } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -29,6 +29,8 @@ import Live2DStage from '../components/Mitsuka/stage/Live2DStage.vue'
 import SceneBackground from '../components/Mitsuka/stage/SceneBackground.vue'
 
 import '../components/Mitsuka/theme.css'
+
+useTitle('Mitsuka')
 
 // In the browser, use relative path so Vite / ngrok reverse proxy handles it seamlessly.
 // Fallback to 127.0.0.1:8010 for SSR or node environments.
