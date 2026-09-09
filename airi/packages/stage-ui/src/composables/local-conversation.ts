@@ -23,7 +23,7 @@ export interface UseLocalConversationOptions {
   onEmotion?: (emotion: EmotionVAD) => void
 }
 
-type CheckpointVAD = {
+interface CheckpointVAD {
   valence: number
   arousal: number
   dominance: number
@@ -131,10 +131,11 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     abort: AbortController,
     myGeneration: number,
     userVad?: CheckpointVAD,
+    showTranscript = true,
   ) {
     const superseded = () => myGeneration !== _generation || abort.signal.aborted
 
-    transcript.value = text
+    transcript.value = showTranscript ? text : ''
     state.value = 'thinking'
 
     let response = ''
@@ -239,6 +240,63 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     reply.value = ''
 
     await respond(text, abort, myGeneration)
+  }
+
+  /**
+   * Start a system-initiated turn without pretending the prompt was typed by
+   * the user. Only Mitsuka's generated reply appears in the conversation.
+   */
+  async function processProactive(prompt: string) {
+    const text = prompt.trim()
+    if (!text || state.value !== 'idle')
+      return
+
+    _stopAll()
+    mouthOpenSource.value = 'local-conversation'
+    const myGeneration = ++_generation
+    turn.value++
+    const abort = new AbortController()
+    _abort = abort
+    error.value = undefined
+    transcript.value = ''
+    reply.value = ''
+    await respond(text, abort, myGeneration, undefined, false)
+  }
+
+  /** Render a fixed reaction line ahead of the first touch. */
+  function prepareSpeech(text: string) {
+    return tts.prepare(text)
+  }
+
+  /**
+   * Speak a fixed touch script immediately from its prepared audio. A missing
+   * preload gracefully falls back to ordinary synthesis.
+   */
+  async function playScript(text: string, prepared?: ArrayBuffer | null) {
+    const script = text.trim()
+    if (!script)
+      return
+
+    _stopAll()
+    mouthOpenSource.value = 'local-conversation'
+    const myGeneration = ++_generation
+    turn.value++
+    const abort = new AbortController()
+    _abort = abort
+    error.value = undefined
+    transcript.value = ''
+    reply.value = script
+    state.value = 'speaking'
+
+    if (prepared)
+      await tts.speakPrepared(prepared, abort)
+    else
+      await tts.speak(script, undefined, abort)
+
+    if (myGeneration === _generation && !abort.signal.aborted) {
+      state.value = 'idle'
+      _releaseSpeechFlag()
+    }
   }
 
   /** Call with the WAV blob when user finishes speaking. Runs full STT → Chat → TTS pipeline. */
@@ -459,7 +517,10 @@ export function useLocalConversation(options: UseLocalConversationOptions = {}) 
     error,
     onSpeechStart,
     process,
+    processProactive,
     processText,
+    prepareSpeech,
+    playScript,
     reset,
   }
 }

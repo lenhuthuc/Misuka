@@ -44,7 +44,7 @@ were audibly a lower voice and a higher voice taking turns. The phrase command
 made it worse rather than better -- each sentence got its own declination, so
 every one of them started high and ended low.
 
-So pitch is a constant of the voice (`tts_pitch_scale`, tuned once for a bright
+So baseline pitch is a constant of the voice (`tts_pitch_scale`, tuned once for a bright
 delivery) and the contour is off by default (`tts_contour_depth`). Emotion
 still moves tempo, pause length and volume, none of which fragment this way.
 The Fujisaki machinery below is kept whole and still tested: it is one config

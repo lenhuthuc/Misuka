@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Live2DLipSync, Live2DLipSyncOptions } from '@proj-airi/model-driver-lipsync'
 import type { Profile } from '@proj-airi/model-driver-lipsync/shared/wlipsync'
+import type { MitsukaTouchArea } from '@proj-airi/stage-ui-live2d'
 import type { SpeechProviderWithExtraOptions } from '@xsai-ext/providers/utils'
 import type { UnElevenLabsOptions } from 'unspeech'
 
@@ -10,10 +11,10 @@ import type { VoicePackSnapshot } from '../../stores/modules/airi-card'
 import type { VoiceInfo } from '../../stores/providers'
 
 import { sleep } from '@moeru/std'
-import { isStageTamagotchi } from '@proj-airi/stage-shared'
 import { createLive2DLipSync } from '@proj-airi/model-driver-lipsync'
 import { wlipsyncProfile } from '@proj-airi/model-driver-lipsync/shared/wlipsync'
 import { createPlaybackManager, createSpeechPipeline, normalizeActPayload } from '@proj-airi/pipelines-audio'
+import { isStageTamagotchi } from '@proj-airi/stage-shared'
 import { Live2DScene, useLive2dParams } from '@proj-airi/stage-ui-live2d'
 import { SpineScene } from '@proj-airi/stage-ui-spine'
 import { ThreeScene } from '@proj-airi/stage-ui-three'
@@ -21,11 +22,11 @@ import { animations } from '@proj-airi/stage-ui-three/assets/vrm'
 import { createQueue } from '@proj-airi/stream-kit'
 import { Callout } from '@proj-airi/ui'
 import { useBroadcastChannel } from '@vueuse/core'
+import { generateSpeech } from '@xsai/generate-speech'
 // import { createTransformers } from '@xsai-transformers/embed'
 // import embedWorkerURL from '@xsai-transformers/embed/worker?worker&url'
 // import { embed } from '@xsai/embed'
 import { Mutex } from 'es-toolkit'
-import { generateSpeech } from '@xsai/generate-speech'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
@@ -60,6 +61,10 @@ const props = withDefaults(defineProps<{
   enableOrbitControls: true,
   paused: false,
 })
+
+const emits = defineEmits<{
+  (e: 'characterTouch', area: MitsukaTouchArea): void
+}>()
 
 const componentState = defineModel<'pending' | 'loading' | 'mounted'>('state', { default: 'pending' })
 
@@ -978,7 +983,6 @@ if (typeof window !== 'undefined') {
   })
 }
 
-
 // Auto-configure VieNeu TTS when the local Python server is reachable.
 // Runs once after the model finishes mounting to avoid racing with the
 // model load which already contends for HTTP connections on startup.
@@ -1035,8 +1039,9 @@ watch(componentState, async (state) => {
     return
 
   if (activeTranscriptionProvider.value
-    && activeTranscriptionProvider.value !== 'openai-compatible-audio-transcription')
+    && activeTranscriptionProvider.value !== 'openai-compatible-audio-transcription') {
     return
+  }
 
   await sleep(2500)
 
@@ -1208,6 +1213,7 @@ defineExpose({
         :live2d-shadow-enabled="live2dShadowEnabled"
         :live2d-max-fps="live2dMaxFps"
         :live2d-render-scale="live2dRenderScale"
+        @touch="emits('characterTouch', $event)"
       />
       <ThreeScene
         v-if="stageModelRenderer === 'vrm' && showStage"

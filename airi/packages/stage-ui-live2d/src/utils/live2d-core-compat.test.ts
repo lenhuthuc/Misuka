@@ -4,7 +4,7 @@ import { applyLive2DCoreCompat } from './live2d-core-compat'
 
 /**
  * `drawables` as Cubism Core 6 (SDK 5-r.5) actually returns it — measured
- * against `TiredGirl_V1.moc3`. Note `drawOrders` is present but is the authored
+ * against `Mitsuka_auto_rigged.moc3`. Note `drawOrders` is present but is the authored
  * draw order (all 500 for that model), *not* a renamed `renderOrders`.
  */
 function createCore6Model() {

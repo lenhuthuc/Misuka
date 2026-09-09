@@ -346,7 +346,18 @@ export function createTtsPlayer(baseUrl: string, options: TtsPlayerOptions = {})
     await drain()
   }
 
-  return { speak, reset, enqueue, drain }
+  /** Pre-render a fixed line so a touch reaction can sound without TTS latency. */
+  function prepare(text: string, vad?: AgentVad): Promise<ArrayBuffer | null> {
+    return synthesize(text, vad, new AbortController())
+  }
+
+  /** Play a line prepared during app idle time through the normal lip-sync graph. */
+  async function speakPrepared(bytes: ArrayBuffer | null, abort: AbortController): Promise<void> {
+    reset()
+    await play(bytes, abort)
+  }
+
+  return { speak, speakPrepared, prepare, reset, enqueue, drain }
 }
 
 /**

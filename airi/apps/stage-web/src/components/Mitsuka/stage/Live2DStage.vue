@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import type { EmotionPayload } from '@proj-airi/stage-ui/constants/emotions'
+import type { MitsukaTouchArea } from '@proj-airi/stage-ui-live2d'
+import type { LocalConvState } from '@proj-airi/stage-ui/composables/local-conversation'
+import type { EmotionState } from '@proj-airi/stage-ui/stores/modules/emotion'
 
 import { ViewControlSlider, WidgetStage } from '@proj-airi/stage-ui/components/scenes'
 import { computed } from 'vue'
@@ -8,14 +10,14 @@ import CharacterController from './CharacterController.vue'
 import SceneOverlay from './SceneOverlay.vue'
 
 const props = withDefaults(defineProps<{
-  state?: 'pending' | 'loading' | 'mounted'
+  state?: LocalConvState
   cursorPosition?: { x: number, y: number }
   enableOrbitControls?: boolean
   paused?: boolean
   viewControls?: boolean
   fullscreen?: boolean
   live2d?: boolean
-  emotion?: EmotionPayload
+  emotion?: EmotionState
 }>(), {
   cursorPosition: () => ({ x: 0, y: 0 }),
   enableOrbitControls: true,
@@ -23,7 +25,8 @@ const props = withDefaults(defineProps<{
   viewControls: false,
   fullscreen: false,
   live2d: true,
-  state: 'pending',
+  state: 'idle',
+  emotion: () => ({ v: 0, a: 0, d: 0 }),
 })
 
 defineEmits<{
@@ -32,6 +35,7 @@ defineEmits<{
   (e: 'toggleFullscreen'): void
   (e: 'pickBackground'): void
   (e: 'openSettings'): void
+  (e: 'characterTouch', area: MitsukaTouchArea): void
 }>()
 
 const viewControlClass = computed(() => {
@@ -48,6 +52,7 @@ const viewControlClass = computed(() => {
         :cursor-position="cursorPosition"
         :enable-orbit-controls="enableOrbitControls"
         :paused="paused"
+        @character-touch="$emit('characterTouch', $event)"
       />
     </div>
 

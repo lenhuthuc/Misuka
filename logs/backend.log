@@ -1,0 +1,250 @@
+INFO:     Started server process [12972]
+INFO:     Waiting for application startup.WWarning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|##########| 199/199 [00:00<00:00, 12901.56it/s]
+D:\myProject\Mitsuka\apps\local-api\brain\embeddings.py:54: FutureWarning: The `get_sentence_embedding_dimension` method has been renamed to `get_embedding_dimension`.
+  return self._load().get_sentence_embedding_dimension() or 384
+INFO:     Application startup complete.
+ERROR:    [Errno 10048] error while attempting to bind on address ('0.0.0.0', 8010): [winerror 10048] only one usage of each sockeINFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64034 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56379 - "OPTIONS /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57332 - "GET /v1/audio/voices HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54690 - "GET /v1/audio/voices HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56379 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56379 - "GET /v1/audio/voices HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56379 - "GET /v1/audio/voices HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56379 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51848 - "OPTIONS /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60791 - "GET /v1/audio/voices HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50145 - "GET /v1/audio/voices HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51848 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58378 - "GET /v1/audio/voices HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58378 - "GET /v1/audio/voices HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56091 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/chat/stream HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/chat/stream HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "POST /v1/audio/speech/finished HTTP/1.1" 204 No Content
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     42.117.111.249:0 - "GET /health HTTP/1.1" 200 OK

@@ -26,6 +26,20 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 const stageUIAssetsRoot = resolve(join(import.meta.dirname, '..', '..', 'packages', 'stage-ui', 'src', 'assets'))
 const sharedCacheDir = resolve(join(import.meta.dirname, '..', '..', '.cache'))
+const localApiProxy = {
+  '/v1': {
+    target: 'http://127.0.0.1:8010',
+    changeOrigin: true,
+  },
+  '/emotion-vad': {
+    target: 'http://127.0.0.1:8010',
+    changeOrigin: true,
+  },
+  '/health': {
+    target: 'http://127.0.0.1:8010',
+    changeOrigin: true,
+  },
+}
 
 function hasFlagEnableMkcert(): boolean {
   if (process.argv.includes('--mkcert')) {
@@ -78,20 +92,7 @@ export default defineConfig({
   },
   server: {
     allowedHosts: true,
-    proxy: {
-      '/v1': {
-        target: 'http://127.0.0.1:8010',
-        changeOrigin: true,
-      },
-      '/emotion-vad': {
-        target: 'http://127.0.0.1:8010',
-        changeOrigin: true,
-      },
-      '/health': {
-        target: 'http://127.0.0.1:8010',
-        changeOrigin: true,
-      },
-    },
+    proxy: localApiProxy,
     fs: {
       // To mute errors like:
       //   The request id ".../node_modules/@fontsource/sniglet/files/sniglet-latin-400-normal.woff" is outside of Vite serving allow list.
@@ -105,6 +106,10 @@ export default defineConfig({
         `${resolve(join(import.meta.dirname, '..', '..', 'packages', 'stage-pages', 'src'))}/*.vue`,
       ],
     },
+  },
+  preview: {
+    allowedHosts: true,
+    proxy: localApiProxy,
   },
   build: {
     sourcemap: true,

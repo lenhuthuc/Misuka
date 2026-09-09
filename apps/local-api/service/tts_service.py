@@ -34,16 +34,34 @@ logger = logging.getLogger(__name__)
 # rises the model produces without evaluating the filters per audio sample.
 _CONTOUR_RATE_HZ = 200.0
 _MITSUKA_NAME = re.compile(r"\bMitsuka\b", re.IGNORECASE)
+_ASCII_ELLIPSIS = re.compile(r"\.{3,}")
 # Preserve decimal points (e.g. 3.14), but remove sentence dots that this
 # Piper voice otherwise verbalises as "chấm".
 _SPOKEN_DOT = re.compile(r"(?<!\d)\.+|\.+(?!\d)")
+_ELLIPSIS_PAUSE_SECONDS = 0.52
+_EXCLAMATION_PITCH_RISE = 0.055
 
 
 def normalize_piper_text(text: str) -> str:
     """Make display text natural for Piper without changing the chat transcript."""
     text = _MITSUKA_NAME.sub("Mít-su-ka", text)
+    # Keep ellipses as one semantic mark before stripping ordinary dots. This
+    # avoids Piper saying "chấm" while retaining a marker for a longer pause.
+    text = _ASCII_ELLIPSIS.sub("…", text)
     text = _SPOKEN_DOT.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def exclamation_pitch_ratio(sample_count: int) -> np.ndarray:
+    """Return a gentle, duration-neutral phrase-final lift for `!`."""
+    ratio = np.ones(max(sample_count, 0), dtype=np.float64)
+    start = int(sample_count * 0.55)
+    if start >= sample_count:
+        return ratio
+    progress = np.linspace(0.0, 1.0, sample_count - start, dtype=np.float64)
+    smooth = progress * progress * (3.0 - 2.0 * progress)
+    ratio[start:] += _EXCLAMATION_PITCH_RISE * smooth
+    return ratio
 
 
 @dataclass
@@ -190,16 +208,27 @@ class TTSService:
         if len(sentences) != len(chunks):
             sentences = [text] * len(chunks)
 
-        pause = np.zeros(int(plan.sentence_pause_s * sample_rate), dtype=np.float32)
         pieces: list[np.ndarray] = []
         spans: list[SpokenSpan] = []
         cursor = 0
 
         for index, (chunk, sentence) in enumerate(zip(chunks, sentences)):
             if index:
+                previous = sentences[index - 1].rstrip()
+                pause_seconds = (
+                    max(plan.sentence_pause_s, _ELLIPSIS_PAUSE_SECONDS)
+                    if previous.endswith("…")
+                    else plan.sentence_pause_s
+                )
+                pause = np.zeros(int(pause_seconds * sample_rate), dtype=np.float32)
                 pieces.append(pause)
                 cursor += pause.size
             resampled = prosody.resample_by(np.asarray(chunk, dtype=np.float32), plan.pitch_scale)
+            stripped_sentence = sentence.rstrip()
+            if stripped_sentence.rstrip("…").rstrip().endswith("!"):
+                resampled = prosody.pitch_shift_variable(
+                    resampled, exclamation_pitch_ratio(resampled.size), sample_rate,
+                )
             pieces.append(resampled)
             spans.append(SpokenSpan(
                 start=cursor / sample_rate,
@@ -208,6 +237,16 @@ class TTSService:
                 is_question=sentence.rstrip().endswith("?"),
             ))
             cursor += resampled.size
+
+            # A final `...` has no following sentence to receive the inter-
+            # sentence pause, so carry the hesitation in the returned WAV.
+            if index == len(chunks) - 1 and stripped_sentence.endswith("…"):
+                trailing_pause = np.zeros(
+                    int(max(plan.sentence_pause_s, _ELLIPSIS_PAUSE_SECONDS) * sample_rate),
+                    dtype=np.float32,
+                )
+                pieces.append(trailing_pause)
+                cursor += trailing_pause.size
 
         return np.concatenate(pieces).astype(np.float32), spans
 

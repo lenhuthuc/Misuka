@@ -106,10 +106,24 @@ onUnmounted(() => {
 // provider or model to pick, so the screen is never "skipped", only completed.
 function handleSetupConfigured() {
   onboardingStore.markSetupCompleted()
+  // `markSetupCompleted()` persists the flag but does not close the current
+  // modal ref. Without this assignment the full-screen overlay remains above
+  // the stage and intercepts every click, including Live2D touch reactions.
+  onboardingStore.showingSetup = false
 }
 </script>
 
 <template>
+  <div
+    role="note"
+    aria-label="Thông báo về bản live demo"
+    class="pointer-events-none fixed inset-x-0 top-0 z-[1000] flex justify-center px-3 pt-2 sm:pt-3"
+  >
+    <p class="max-w-2xl border-2 border-amber-300 rounded-xl bg-slate-950/90 px-4 py-2 text-center text-xs text-amber-100 font-bold leading-snug shadow-lg backdrop-blur-md sm:px-5 sm:py-2.5 lg:text-base sm:text-sm">
+      ĐÂY LÀ BẢN LIVE DEMO TRÊN SEVER MVP NÊN KO CÓ MẤY CÁI MODEL AI TRAIN
+    </p>
+  </div>
+
   <StageTransitionGroup
     :primary-color="primaryColor"
     :secondary-color="secondaryColor"

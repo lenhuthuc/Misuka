@@ -135,8 +135,9 @@ def _resolve_prosody(
 
     `vad` is the reading to render with -- the caller's own, or one derived
     from the text under `auto_prosody`, or None when there is neither. It moves
-    tempo alone; pitch comes from the voice's own configured brightness, the
-    same for every utterance (see service/prosody.py).
+    tempo alone; the baseline pitch comes from the voice's configured
+    brightness. Punctuation-local shaping (`!`) is applied later by
+    `TTSService` and does not alter this reply-wide baseline.
 
     `speed` still wins where the caller set it explicitly: an OpenAI-compatible
     client asking for 1.5x speech means it, and having the emotion model

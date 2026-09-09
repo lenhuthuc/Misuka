@@ -15,12 +15,25 @@ const props = withDefaults(defineProps<{
   maxFps: 0,
 })
 
+const emits = defineEmits<{
+  (e: 'pointerdown', event: PointerEvent): void
+  (e: 'pointerup', event: PointerEvent): void
+}>()
+
 const componentState = defineModel<'pending' | 'loading' | 'mounted'>('state', { default: 'pending' })
 
 const containerRef = ref<HTMLDivElement>()
 const isPixiCanvasReady = ref(false)
 const pixiApp = ref<Application>()
 const pixiAppCanvas = ref<HTMLCanvasElement>()
+
+function handleCanvasPointerDown(event: PointerEvent) {
+  emits('pointerdown', event)
+}
+
+function handleCanvasPointerUp(event: PointerEvent) {
+  emits('pointerup', event)
+}
 
 function resolveMaxFps(limit?: number) {
   if (!limit || limit <= 0)
@@ -52,8 +65,6 @@ async function initLive2DPixiStage(parent: HTMLDivElement) {
   // https://guansss.github.io/pixi-live2d-display/#package-importing
   Live2DModel.registerTicker(Ticker)
   extensions.add(TickerPlugin)
-  // We handle the interactions (e.g., mouse-based focusing at) manually
-  // extensions.add(InteractionManager)
 
   pixiApp.value = new Application({
     width: props.width * props.resolution,
@@ -74,8 +85,11 @@ async function initLive2DPixiStage(parent: HTMLDivElement) {
   pixiAppCanvas.value.style.height = '100%'
   pixiAppCanvas.value.style.objectFit = 'cover'
   pixiAppCanvas.value.style.display = 'block'
+  pixiAppCanvas.value.style.touchAction = 'manipulation'
 
   parent.appendChild(pixiApp.value.view)
+  pixiAppCanvas.value.addEventListener('pointerdown', handleCanvasPointerDown)
+  pixiAppCanvas.value.addEventListener('pointerup', handleCanvasPointerUp)
 
   isPixiCanvasReady.value = true
   componentState.value = 'mounted'
@@ -98,7 +112,11 @@ watch(() => props.maxFps, (limit) => {
 })
 
 onMounted(async () => containerRef.value && await initLive2DPixiStage(containerRef.value))
-onUnmounted(() => pixiApp.value?.destroy())
+onUnmounted(() => {
+  pixiAppCanvas.value?.removeEventListener('pointerdown', handleCanvasPointerDown)
+  pixiAppCanvas.value?.removeEventListener('pointerup', handleCanvasPointerUp)
+  pixiApp.value?.destroy()
+})
 
 async function captureFrame() {
   const frame = new Promise<Blob | null>((resolve) => {

@@ -1,0 +1,18 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "Mitsuka_auto_rigged.moc3",
+		"Textures": [
+			"Mitsuka_auto_rigged.1024/texture_00.png"
+		],
+		"Physics": "Mitsuka_auto_rigged.physics3.json",
+		"DisplayInfo": "Mitsuka_auto_rigged.cdi3.json"
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": []
+		}
+	]
+}

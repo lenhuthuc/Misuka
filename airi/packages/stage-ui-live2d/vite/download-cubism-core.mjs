@@ -10,7 +10,7 @@
 //   Core 5.0.0 (SDK 5-r.3) → moc3 v5 → Cubism Editor 5.0
 //   Core 6.0.1 (SDK 5-r.5) → moc3 v6 → Cubism Editor 5.1
 //
-// `assets/models/models/TiredGirl_V1.moc3` is moc3 v6, so the app needs 5-r.5.
+// `assets/models/models/Mitsuka_auto_rigged.moc3` is moc3 v6, so the app needs 5-r.5.
 // Bump CUBISM_SDK_VERSION (and the matching <script src> in each index.html)
 // when a model exported from a newer editor stops loading.
 //

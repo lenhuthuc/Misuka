@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Application } from '@pixi/app'
 
-import type { EmotionVAD, PixiLive2DInternalModel } from '../../../composables/live2d'
+import type { EmotionVAD, MitsukaTouchArea, PixiLive2DInternalModel } from '../../../composables/live2d'
 
 import { listenBeatSyncBeatSignal } from '@proj-airi/stage-shared/beat-sync'
 import { useTheme } from '@proj-airi/ui'
@@ -15,8 +15,11 @@ import { Live2DFactory, Live2DModel, MotionPriority } from 'pixi-live2d-display/
 import { computed, onMounted, onUnmounted, ref, shallowRef, toRef, watch } from 'vue'
 
 import {
+  classifyMitsukaTouch,
   createBeatSyncController,
   createLive2DEmotionDriver,
+  createMitsukaLivenessDriver,
+  createMitsukaTouchReactionDriver,
   useExpressionController,
   useLive2DMotionManagerUpdate,
   useMotionUpdatePluginAutoEyeBlink,
@@ -29,9 +32,9 @@ import {
   useSettingsLive2d,
 } from '../../../composables/live2d'
 import { useFitModel } from '../../../composables/live2d/fit-model'
-import { applyLive2DCoreCompat } from '../../../utils/live2d-core-compat'
 import { Emotion, EmotionNeutralMotionName } from '../../../constants/emotions'
 import { useL2dViewControl, useLive2dParams } from '../../../stores'
+import { applyLive2DCoreCompat } from '../../../utils/live2d-core-compat'
 
 const props = withDefaults(defineProps<{
   modelSrc?: string
@@ -78,6 +81,7 @@ const props = withDefaults(defineProps<{
 const emits = defineEmits<{
   (e: 'modelLoaded'): void
   (e: 'error', error: Error): void
+  (e: 'touch', area: MitsukaTouchArea): void
 }>()
 
 const componentState = defineModel<'pending' | 'loading' | 'mounted'>('state', { default: 'pending' })
@@ -175,7 +179,12 @@ const themeColorsHueDynamic = toRef(() => props.themeColorsHueDynamic)
 const live2dIdleAnimationEnabled = toRef(() => props.live2dIdleAnimationEnabled)
 const live2dEyeTrackingEnabled = toRef(() => props.eyeTracking)
 const live2dEyeFocusSourceActive = toRef(() => props.eyeFocusSourceActive)
-const live2dForceIdleEyeAnimation = toRef(() => props.live2dForceIdleEyeAnimation)
+// Mitsuka's authored neutral eye pose already includes a small vertical gaze
+// offset. Random idle focus moves its iris away from that pose, which makes the
+// WebGL render visibly differ from the Cubism preview. Cursor/face tracking
+// remains available; only the synthetic idle saccade is disabled for the
+// bundled Mitsuka preset.
+const live2dForceIdleEyeAnimation = computed(() => Boolean(props.live2dForceIdleEyeAnimation) && props.modelId !== 'preset-live2d-1')
 const live2dAutoBlinkEnabled = toRef(() => props.live2dAutoBlinkEnabled)
 const live2dForceAutoBlinkEnabled = toRef(() => props.live2dForceAutoBlinkEnabled)
 const live2dExpressionEnabled = toRef(() => props.live2dExpressionEnabled)
@@ -193,17 +202,16 @@ const savedExpressionManager = shallowRef<any>(null)
 
 const localCurrentMotion = ref<{ group: string, index: number }>({ group: 'Idle', index: 0 })
 
-const { live2dEmotionVadEnabled, live2dEmotionVadIntensity } = storeToRefs(useSettingsLive2d())
+const { live2dEmotionVadEnabled } = storeToRefs(useSettingsLive2d())
 const emotionDriver = createLive2DEmotionDriver({
   source: () => props.emotionVad,
   enabled: () => live2dEmotionVadEnabled.value,
-  intensity: () => live2dEmotionVadIntensity.value,
 })
+const mitsukaLiveness = createMitsukaLivenessDriver(() => props.emotionVad)
+const mitsukaTouchReaction = createMitsukaTouchReactionDriver()
 
 const beatSync = createBeatSyncController({
-  // The emotion head pose rides on the beat-sync *base* rather than being written
-  // to ParamAngle* directly — the spring rewrites those every frame and would
-  // otherwise cancel the pose out. See `Live2DEmotionDriver.headAngle`.
+  // VAD deliberately leaves head angles to the tracking / beat-sync layer.
   baseAngles: () => ({
     x: modelParameters.value.angleX + emotionDriver.headAngle.x.value,
     y: modelParameters.value.angleY + emotionDriver.headAngle.y.value,
@@ -292,13 +300,6 @@ async function loadModel() {
     model.value.anchor.set(0.5, 0.5)
     setScaleAndPosition()
 
-    // --- Interaction
-
-    model.value.on('hit', (hitAreas) => {
-      if (model.value && hitAreas.includes('body'))
-        model.value.motion('tap_body')
-    })
-
     // --- Motion
 
     const internalModel = model.value.internalModel
@@ -379,14 +380,16 @@ async function loadModel() {
     // 1. Expression: sets desired parameter values (e.g. closed eyes = 0).
     // 2. Blink: reads post-expression eye values, Multiply-modulates on top,
     //    so blink respects expression state (0 × blinkFactor = 0).
-    // 3. Emotion: scales the blinked eyes and writes the V/A/D face + posture,
-    //    including the resting ParamMouthOpenY.
-    // 4. Lip sync: owns the mouth while speech is active, then releases to the
-    //    resting value the emotion plugin just wrote.
+    // 3. Emotion: writes only the four VAD-owned facial expression parameters.
+    // 4. Lip sync: is the sole owner of ParamMouthOpenY.
     motionManagerUpdate.register(useMotionUpdatePluginExpression(expressionController), 'final')
     motionManagerUpdate.register(useMotionUpdatePluginAutoEyeBlink(live2dExpressionEnabled), 'final')
     motionManagerUpdate.register(useMotionUpdatePluginEmotionVAD(emotionDriver), 'final')
     motionManagerUpdate.register(useMotionUpdatePluginLipSync(mouthOpenSize, nowSpeaking), 'final')
+    motionManagerUpdate.register(mitsukaLiveness, 'final')
+    // Touch poses are the last short-lived overlay so the embarrassed/blush
+    // reaction remains visible over tracking, emotion and idle movement.
+    motionManagerUpdate.register(mitsukaTouchReaction, 'final')
 
     const hookedUpdate = motionManager.update as (model: PixiLive2DInternalModel['coreModel'], now: number) => boolean
     motionManager.update = function (model: PixiLive2DInternalModel['coreModel'], now: number) {
@@ -789,9 +792,38 @@ function listMotionGroups() {
   return availableMotions.value
 }
 
+/**
+ * Handle a DOM pointer in normalized canvas coordinates. We deliberately do
+ * this outside Pixi's InteractionManager: gaze tracking already owns pointer
+ * input, and this path works for both mouse and touch on local/live builds.
+ */
+function touchAtCanvasPoint(normalizedX: number, normalizedY: number) {
+  if (!model.value || !pixiApp.value)
+    return false
+
+  const renderer = pixiApp.value.renderer
+  const pointX = normalizedX * renderer.width
+  const pointY = normalizedY * renderer.height
+  const bounds = model.value.getBounds()
+  if (!bounds.width || !bounds.height
+    || pointX < bounds.x || pointX > bounds.x + bounds.width
+    || pointY < bounds.y || pointY > bounds.y + bounds.height) {
+    return false
+  }
+
+  const area = classifyMitsukaTouch({
+    x: (pointX - bounds.x) / bounds.width,
+    y: (pointY - bounds.y) / bounds.height,
+  })
+  mitsukaTouchReaction.activate(area)
+  emits('touch', area)
+  return true
+}
+
 defineExpose({
   setMotion,
   listMotionGroups,
+  touchAtCanvasPoint,
   modelNormalizeParams,
   initialModelHeight,
   initialModelWidth,

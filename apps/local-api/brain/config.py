@@ -309,7 +309,7 @@ class Settings(BaseSettings):
 
     # Voice used when a request asks for "default". Without this the app's voice
     # was whichever one the registry happened to list first.
-    tts_default_voice: str = Field(default="fusion_E_ling75_acoustic100")
+    tts_default_voice: str = Field(default="misuka-medium")
 
     # How far the agent's V/A/D is allowed to move tempo, pause length and
     # volume (service/prosody.py). 0.0 renders exactly what Piper would have

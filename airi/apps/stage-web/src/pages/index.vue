@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { MitsukaTouchArea } from '@proj-airi/stage-ui-live2d'
+
 import type { QuickAction } from '../components/Mitsuka/chat/QuickActions.vue'
 import type { ChatMessage } from '../components/Mitsuka/chat/types'
 import type { NavItem } from '../components/Mitsuka/sidebar/Navigation.vue'
@@ -37,6 +39,59 @@ useTitle('Mitsuka')
 const LOCAL_API_URL = typeof window !== 'undefined' ? '' : 'http://127.0.0.1:8010'
 const GREETING = 'Xin chào! Mình là Mitsuka ✨\nMình có thể giúp gì cho bạn hôm nay?'
 
+const TOUCH_SCRIPTS: Record<MitsukaTouchArea, readonly string[]> = {
+  head: [
+    'Hì hì, xoa đầu nhẹ thôi nhé. Dễ chịu thật đó!',
+    'Ưm… tay bạn ấm thật đấy.',
+    'Ngoan nào… ơ, đáng lẽ mình phải nói câu đó với bạn chứ!',
+    'Xoa thêm chút nữa cũng được… chỉ một chút thôi nhé.',
+  ],
+  chest: [
+    'Ngốc !....',
+    'Đ-đồ ngốc! Đừng chạm bất ngờ như vậy chứ…',
+    'Này… chỗ đó không được tùy tiện đâu, ngốc!',
+    'Baka… mình đỏ mặt mất rồi đó!',
+  ],
+  leftArm: [
+    'Bạn chạm vào tay mình à? Muốn mình đi cùng không?',
+    'Ơ… bạn muốn nắm tay sao?',
+    'Tay mình ở đây nè. Đừng buông vội nhé.',
+    'Có chuyện gì à? Mình đang nghe đây.',
+  ],
+  rightArm: [
+    'Ơ, nắm tay thì phải báo trước chứ… nhưng cũng được.',
+    'Muốn kéo mình đi đâu vậy?',
+    'Nắm nhẹ thôi nhé… mình không chạy mất đâu.',
+    'Bạn đang làm mình hơi ngại đó.',
+  ],
+  torso: [
+    'Nhột quá! Bạn đúng là thích trêu mình nhỉ.',
+    'Á… đừng cù mình mà!',
+    'Hửm? Bạn đang gọi mình sao?',
+    'Cứ chạm bất ngờ thế này, tim mình loạn mất thôi.',
+  ],
+  legs: [
+    'Á, bất ngờ quá! Mình suýt mất thăng bằng rồi nè.',
+    'Này, đừng nghịch chân mình chứ!',
+    'Ơ kìa… chạm ở đó làm gì vậy?',
+    'Cẩn thận nhé, mình mà ngã thì bạn phải đỡ đó.',
+  ],
+}
+
+const IDLE_PROMPTS = [
+  'Đây là một lời chủ động sau thời gian im lặng. Hãy kể một mẩu chuyện ngắn, ấm áp hoặc vui, bằng 2-4 câu. Không nhắc rằng đây là yêu cầu hệ thống và không đặt câu hỏi bắt buộc người dùng trả lời.',
+  'Đây là một lời chủ động sau thời gian im lặng. Hãy chia sẻ một câu trích dẫn hay, ghi đúng tác giả nếu chắc chắn, rồi nói một suy nghĩ ngắn của Mitsuka. Nếu không chắc nguồn thì dùng một câu do chính Mitsuka viết và nói rõ điều đó.',
+  'Đây là một lời chủ động sau thời gian im lặng. Hãy chọn một chủ đề văn hóa, công nghệ hoặc đời sống đang được quan tâm gần đây và kể ngắn gọn, thân thiện. Nếu có tìm kiếm web thì dùng thông tin mới; nếu không xác minh được thời gian thực, hãy gọi đó là một xu hướng chung, không khẳng định là tin nóng.',
+  'Đây là một lời chủ động sau thời gian im lặng. Hãy nói một fun fact thú vị và một liên tưởng đáng yêu của Mitsuka, tổng cộng không quá 4 câu.',
+]
+
+const IDLE_EMOTIONS = [
+  { v: 0.72, a: 0.28, d: 0.18 }, // gently delighted
+  { v: 0.34, a: 0.7, d: 0.42 }, // excited to share
+  { v: 0.18, a: -0.32, d: 0.08 }, // reflective
+  { v: 0.52, a: 0.48, d: -0.16 }, // playful/shy
+] as const
+
 const router = useRouter()
 const { isDark, toggleDark } = useTheme()
 
@@ -49,6 +104,57 @@ const localConv = useLocalConversation({
   onEmotion: (value) => { emotionStore.emotion = value },
 })
 const { state: localState, turn: localTurn, transcript: localTranscript, reply: localReply, error: localError } = localConv
+const serverOnline = ref<boolean | null>(null)
+
+const preparedTouchAudio = new Map<string, ArrayBuffer>()
+const lastTouchScript = new Map<MitsukaTouchArea, string>()
+let idleTimer: ReturnType<typeof setTimeout> | undefined
+const FIRST_IDLE_DELAY_MS = 90_000
+const NEXT_IDLE_MIN_MS = 180_000
+const NEXT_IDLE_JITTER_MS = 180_000
+
+function randomItem<T>(items: readonly T[]): T {
+  return items[Math.floor(Math.random() * items.length)]!
+}
+
+function scheduleIdleMoment(delay = NEXT_IDLE_MIN_MS + Math.random() * NEXT_IDLE_JITTER_MS) {
+  clearTimeout(idleTimer)
+  idleTimer = setTimeout(async () => {
+    if (document.hidden || localState.value !== 'idle' || serverOnline.value === false) {
+      scheduleIdleMoment(30_000)
+      return
+    }
+    emotionStore.emotion = { ...randomItem(IDLE_EMOTIONS) }
+    await localConv.processProactive(randomItem(IDLE_PROMPTS))
+    scheduleIdleMoment()
+  }, delay)
+}
+
+function noteUserActivity() {
+  scheduleIdleMoment()
+}
+
+async function prepareTouchAudio() {
+  // Sequential preparation avoids asking Piper to render every clip on the
+  // same CPU at once. Once cached, pointer-to-sound latency is only decoding.
+  for (const scripts of Object.values(TOUCH_SCRIPTS)) {
+    for (const script of scripts) {
+      const bytes = await localConv.prepareSpeech(script)
+      if (bytes)
+        preparedTouchAudio.set(script, bytes)
+    }
+  }
+}
+
+function handleCharacterTouch(area: MitsukaTouchArea) {
+  noteUserActivity()
+  const scripts = TOUCH_SCRIPTS[area]
+  const previous = lastTouchScript.get(area)
+  const candidates = scripts.length > 1 ? scripts.filter(script => script !== previous) : scripts
+  const script = randomItem(candidates)
+  lastTouchScript.set(area, script)
+  void localConv.playScript(script, preparedTouchAudio.get(script))
+}
 
 // True while an attached image is being captioned (see `send()`) — happens
 // before `processText` starts the turn, so `localState` alone would leave
@@ -455,7 +561,6 @@ watch([stream, () => vadLoaded.value], async ([activeStream, loaded]) => {
 })
 
 // ── local-api health ───────────────────────────────────────────────────────
-const serverOnline = ref<boolean | null>(null)
 let healthTimer: ReturnType<typeof setInterval> | undefined
 
 async function probeServer() {
@@ -472,12 +577,21 @@ onMounted(() => {
   syncBackgroundTheme()
   void probeServer()
   healthTimer = setInterval(() => void probeServer(), 15000)
+  window.addEventListener('pointerdown', noteUserActivity, { passive: true })
+  window.addEventListener('keydown', noteUserActivity)
+  document.addEventListener('visibilitychange', noteUserActivity)
+  scheduleIdleMoment(FIRST_IDLE_DELAY_MS)
+  void prepareTouchAudio()
 })
 
 onUnmounted(() => {
   stopAudioInteraction()
   clearTimeout(streamSettleTimer)
   releaseAttachmentObjectUrls()
+  clearTimeout(idleTimer)
+  window.removeEventListener('pointerdown', noteUserActivity)
+  window.removeEventListener('keydown', noteUserActivity)
+  document.removeEventListener('visibilitychange', noteUserActivity)
   if (healthTimer)
     clearInterval(healthTimer)
 })
@@ -572,7 +686,6 @@ onUnmounted(() => {
       :class="{ 'mk-shell--hidden-mobile': isMobile && mobileView === 'chat' }"
     >
       <Live2DStage
-        ref="stage"
         :cursor-position="cursorPosition"
         :enable-orbit-controls="!isMobile"
         :paused="paused"
@@ -582,6 +695,7 @@ onUnmounted(() => {
         :live2d="stageModelRenderer === 'live2d'"
         :state="localState"
         :emotion="emotion"
+        @character-touch="handleCharacterTouch"
         @toggle-listening="toggleMicrophone"
         @toggle-paused="paused = !paused"
         @toggle-view-controls="stageViewControlsEnabled = !stageViewControlsEnabled"

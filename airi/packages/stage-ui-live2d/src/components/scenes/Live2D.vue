@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EmotionVAD, Live2DEyeFocusSource } from '../../composables/live2d'
+import type { EmotionVAD, Live2DEyeFocusSource, MitsukaTouchArea } from '../../composables/live2d'
 
 import { Screen } from '@proj-airi/ui'
 import { storeToRefs } from 'pinia'
@@ -34,6 +34,10 @@ const props = withDefaults(defineProps<{
   themeColorsHueDynamic: false,
 })
 
+const emits = defineEmits<{
+  (e: 'touch', area: MitsukaTouchArea): void
+}>()
+
 const componentState = defineModel<'pending' | 'loading' | 'mounted'>('state', { default: 'pending' })
 const componentStateCanvas = defineModel<'pending' | 'loading' | 'mounted'>('canvasState', { default: 'pending' })
 const componentStateModel = defineModel<'pending' | 'loading' | 'mounted'>('modelState', { default: 'pending' })
@@ -42,6 +46,7 @@ const live2dCanvasRef = ref<InstanceType<typeof Live2DCanvas>>()
 const live2dModelRef = ref<InstanceType<typeof Live2DModel>>()
 const activeCursorPosition = ref<Live2DEyeFocusSource | null>(null)
 let clearCursorFocusTimeout: ReturnType<typeof setTimeout> | undefined
+const touchPointersHandledOnDown = new Set<number>()
 
 const {
   live2dEyeTracking,
@@ -84,6 +89,39 @@ watch([componentStateModel, componentStateCanvas], () => {
     : 'loading'
 })
 
+function handlePointer(event: PointerEvent) {
+  // Ignore non-primary mouse buttons while keeping touch and pen input.
+  if (event.pointerType === 'mouse' && event.button !== 0)
+    return
+
+  const canvas = live2dCanvasRef.value?.canvasElement()
+  if (!canvas)
+    return
+  const bounds = canvas.getBoundingClientRect()
+  if (!bounds.width || !bounds.height)
+    return
+
+  live2dModelRef.value?.touchAtCanvasPoint(
+    (event.clientX - bounds.left) / bounds.width,
+    (event.clientY - bounds.top) / bounds.height,
+  )
+}
+
+function handlePointerDown(event: PointerEvent) {
+  // React on contact on phones. A tiny finger movement can cancel pointerup
+  // when the browser starts a scroll gesture, which made quick taps disappear.
+  if (event.pointerType === 'mouse')
+    return
+  touchPointersHandledOnDown.add(event.pointerId)
+  handlePointer(event)
+}
+
+function handlePointerUp(event: PointerEvent) {
+  if (touchPointersHandledOnDown.delete(event.pointerId))
+    return
+  handlePointer(event)
+}
+
 defineExpose({
   canvasElement: () => {
     return live2dCanvasRef.value?.canvasElement()
@@ -105,6 +143,8 @@ defineExpose({
       :resolution="live2dRenderScale"
       :max-fps="live2dMaxFps"
       max-h="100dvh"
+      @pointerdown="handlePointerDown"
+      @pointerup="handlePointerUp"
     >
       <Live2DModel
         ref="live2dModelRef"
@@ -129,6 +169,7 @@ defineExpose({
         :live2d-force-auto-blink-enabled="live2dForceAutoBlinkEnabled"
         :live2d-expression-enabled="live2dExpressionEnabled"
         :live2d-shadow-enabled="live2dShadowEnabled"
+        @touch="emits('touch', $event)"
       />
     </Live2DCanvas>
   </Screen>
